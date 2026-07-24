@@ -2,7 +2,9 @@
 
 const LS_KEY = 'housecart.me';
 let me = null;                 // { id, name, color }
-let state = { roommates: [], items: [] };
+let state = { roommates: [], items: [], parsing_enabled: false, default_currency: '£' };
+let receipts = [];             // list of receipts (with items) for the Split tab
+let openReceiptId = null;      // id of the receipt whose detail modal is open
 let currentView = 'shopping';
 let pollTimer = null;
 
@@ -43,7 +45,13 @@ async function refresh() {
     const mine = state.roommates.find((r) => r.id === me.id);
     if (mine) { me = mine; localStorage.setItem(LS_KEY, JSON.stringify(me)); }
   }
+  if (currentView === 'split') await refreshReceipts();
   if (me) render();
+  if (openReceiptId) await refreshOpenReceipt();
+}
+
+async function refreshReceipts() {
+  try { receipts = await api('/api/receipts'); } catch { /* keep last */ }
 }
 
 function startPolling() {
@@ -117,6 +125,7 @@ function render() {
     house: renderHouse,
     mine: renderMine,
     bought: renderBought,
+    split: renderSplit,
   })[currentView](view);
 }
 
@@ -317,17 +326,360 @@ async function addItemSubmit(e) {
   } catch (err) { toast(err.message); }
 }
 
+// ---- receipts / split ----------------------------------------------------
+function money(n, currency) {
+  const cur = currency || state.default_currency || '£';
+  const val = (Number(n) || 0).toFixed(2);
+  return /^[A-Za-z]{3}$/.test(cur) ? `${val} ${cur.toUpperCase()}` : `${cur}${val}`;
+}
+
+// Works out who owes the buyer how much for one receipt.
+function computeSettlement(receipt) {
+  const buyerId = receipt.buyer_id;
+  const nSplit = Math.max(state.roommates.length, 1);
+  const owed = {};
+  let unassigned = 0;
+  for (const it of receipt.items || []) {
+    const price = Number(it.price) || 0;
+    if (it.shared) {
+      const share = price / nSplit;
+      for (const r of state.roommates) {
+        if (r.id === buyerId) continue;
+        owed[r.id] = (owed[r.id] || 0) + share;
+      }
+    } else if (it.assigned_to) {
+      if (it.assigned_to !== buyerId) owed[it.assigned_to] = (owed[it.assigned_to] || 0) + price;
+    } else {
+      unassigned += price;
+    }
+  }
+  return { owed, unassigned };
+}
+
+function renderSplit(view) {
+  const cta = el('button', { className: 'scan-cta' }, '📷 Scan a receipt');
+  cta.onclick = triggerScan;
+  view.append(cta);
+
+  if (!receipts.length) {
+    view.append(emptyState('🧾', state.parsing_enabled
+      ? 'No receipts yet. Snap one after a shop and we\'ll pull out the items to split.'
+      : 'No receipts yet. Snap one and add the items to split the cost.'));
+    return;
+  }
+  view.append(sectionHead('Receipts', receipts.length));
+  receipts.forEach((r) => view.append(receiptCard(r)));
+}
+
+function receiptCard(r) {
+  const card = el('div', { className: 'receipt-card' });
+
+  const top = el('div', { className: 'receipt-top' });
+  top.append(el('div', { className: 'receipt-store' }, r.store || 'Receipt'));
+  top.append(el('div', { className: 'receipt-total' }, money(r.total, r.currency)));
+  card.append(top);
+
+  const meta = el('div', { className: 'receipt-meta' });
+  meta.append(dot(r.buyer_color || '#999'));
+  meta.append(`Paid by ${r.buyer_id === me.id ? 'you' : (r.buyer_name || 'someone')}`);
+  if (r.purchased_at) meta.append(` · ${r.purchased_at}`);
+  card.append(meta);
+
+  const { owed } = computeSettlement(r);
+  if (r.buyer_id === me.id) {
+    const total = Object.values(owed).reduce((a, b) => a + b, 0);
+    if (total > 0.005) card.append(el('div', { className: 'receipt-owe owe-pos' }, `You're owed ${money(total, r.currency)}`));
+  } else if ((owed[me.id] || 0) > 0.005) {
+    card.append(el('div', { className: 'receipt-owe owe-neg' }, `You owe ${r.buyer_name || 'them'} ${money(owed[me.id], r.currency)}`));
+  }
+
+  card.onclick = () => openReceipt(r.id);
+  return card;
+}
+
+// ---- scan flow -----------------------------------------------------------
+function onFab() {
+  if (currentView === 'split') triggerScan();
+  else openAddModal();
+}
+
+function triggerScan() {
+  const input = $('#receipt-file');
+  input.value = '';
+  input.click();
+}
+
+async function onReceiptFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const scanning = $('#scanning');
+  $('#scan-text').textContent = state.parsing_enabled ? 'Reading your receipt…' : 'Uploading receipt…';
+  scanning.classList.remove('hidden');
+  try {
+    const img = await prepImage(file);
+    const receipt = await api('/api/receipts', {
+      method: 'POST',
+      body: JSON.stringify({ buyer_id: me.id, image_base64: img.base64, media_type: img.mediaType }),
+    });
+    scanning.classList.add('hidden');
+    currentView = 'split';
+    await refreshReceipts();
+    render();
+    setOpenReceipt(receipt);
+    if (receipt.parse_status === 'disabled') toast('Auto-scan is off — add items below');
+    else if (receipt.parse_status === 'error') toast("Couldn't read it — add items below");
+  } catch (err) {
+    scanning.classList.add('hidden');
+    toast(err.message || 'Upload failed');
+  }
+}
+
+// Downscale to keep the upload small; fall back to the raw file if canvas fails.
+function prepImage(file, maxDim = 1600) {
+  return new Promise((resolve) => {
+    const done = (base64, mediaType) => resolve({ base64, mediaType });
+    const strip = (d) => String(d).replace(/^data:[^,]+,/, '');
+    const fallback = () => {
+      const reader = new FileReader();
+      reader.onload = () => done(strip(reader.result), file.type || 'image/jpeg');
+      reader.onerror = () => done('', file.type || 'image/jpeg');
+      reader.readAsDataURL(file);
+    };
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let { width, height } = img;
+          const scale = Math.min(1, maxDim / Math.max(width, height));
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          URL.revokeObjectURL(url);
+          done(strip(canvas.toDataURL('image/jpeg', 0.82)), 'image/jpeg');
+        } catch { URL.revokeObjectURL(url); fallback(); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); fallback(); };
+      img.src = url;
+    } catch { fallback(); }
+  });
+}
+
+// ---- receipt detail modal ------------------------------------------------
+async function openReceipt(id) {
+  try { setOpenReceipt(await api(`/api/receipts/${id}`)); }
+  catch (err) { toast(err.message); }
+}
+
+function setOpenReceipt(receipt) {
+  openReceiptId = receipt.id;
+  renderReceiptDetail(receipt);
+  $('#receipt-modal').classList.remove('hidden');
+}
+
+function closeReceipt() {
+  openReceiptId = null;
+  const m = $('#receipt-modal');
+  m.classList.add('hidden');
+  m.innerHTML = '';
+}
+
+async function refreshOpenReceipt() {
+  if (!openReceiptId) return;
+  const modal = $('#receipt-modal');
+  // Don't rebuild while the user is editing a field inside it.
+  if (modal.contains(document.activeElement) && document.activeElement !== document.body) return;
+  try {
+    const receipt = await api(`/api/receipts/${openReceiptId}`);
+    if (openReceiptId === receipt.id) renderReceiptDetail(receipt);
+  } catch { /* ignore */ }
+}
+
+function rdField(label, control) {
+  const f = el('div', { className: 'rd-field' });
+  f.append(el('label', {}, label), control);
+  return f;
+}
+
+function renderReceiptDetail(receipt) {
+  const modal = $('#receipt-modal');
+  modal.innerHTML = '';
+  const wrap = el('div', { className: 'receipt-detail' });
+
+  const head = el('div', { className: 'rd-head' });
+  head.append(el('h2', {}, '🧾 Receipt'));
+  const close = el('button', { className: 'rd-close' }, '✕');
+  close.onclick = closeReceipt;
+  head.append(close);
+  wrap.append(head);
+
+  const body = el('div', { className: 'rd-body' });
+
+  if (receipt.image_file) {
+    const photo = el('img', { className: 'rd-photo', src: `/api/receipts/${receipt.id}/image`, alt: 'Receipt photo' });
+    photo.onerror = () => photo.remove();
+    body.append(photo);
+  }
+
+  // Store
+  const storeInput = el('input', { type: 'text', value: receipt.store || '', placeholder: 'Shop name' });
+  storeInput.onchange = () => patchReceipt(receipt.id, { store: storeInput.value });
+  body.append(rdField('Store', storeInput));
+
+  // Paid by
+  const buyerSel = el('select');
+  for (const r of state.roommates) {
+    const opt = el('option', { value: String(r.id) }, r.id === me.id ? `${r.name} (you)` : r.name);
+    if (r.id === receipt.buyer_id) opt.selected = true;
+    buyerSel.append(opt);
+  }
+  buyerSel.onchange = () => patchReceipt(receipt.id, { buyer_id: Number(buyerSel.value) });
+  body.append(rdField('Paid by', buyerSel));
+
+  // Date + Total
+  const row2 = el('div', { className: 'rd-row2' });
+  const dateInput = el('input', { type: 'text', value: receipt.purchased_at || '', placeholder: 'YYYY-MM-DD' });
+  dateInput.onchange = () => patchReceipt(receipt.id, { purchased_at: dateInput.value });
+  row2.append(rdField('Date', dateInput));
+  const totalInput = el('input', { type: 'number', step: '0.01', value: receipt.total == null ? '' : receipt.total });
+  totalInput.onchange = () => patchReceipt(receipt.id, { total: totalInput.value === '' ? null : Number(totalInput.value) });
+  row2.append(rdField(`Total (${receipt.currency || state.default_currency})`, totalInput));
+  body.append(row2);
+
+  // Items
+  body.append(el('div', { className: 'rd-section-label' }, 'Items — assign each to someone'));
+  (receipt.items || []).forEach((it) => body.append(receiptItemRow(receipt, it)));
+
+  const addBtn = el('button', { className: 'rd-additem' }, '＋ Add item');
+  addBtn.onclick = () => addReceiptItem(receipt.id);
+  body.append(addBtn);
+
+  body.append(settlementBox(receipt));
+  wrap.append(body);
+
+  const foot = el('div', { className: 'rd-foot' });
+  const del = el('button', { className: 'rd-delete' }, 'Delete receipt');
+  del.onclick = () => deleteReceipt(receipt.id);
+  foot.append(del);
+  wrap.append(foot);
+
+  modal.append(wrap);
+  modal.onclick = (e) => { if (e.target === modal) closeReceipt(); };
+}
+
+function receiptItemRow(receipt, it) {
+  const row = el('div', { className: 'ri' });
+
+  const name = el('input', { className: 'ri-name', type: 'text', value: it.name });
+  name.onchange = () => patchItem(it.id, { name: name.value });
+  row.append(name);
+
+  const price = el('input', { className: 'ri-price', type: 'number', step: '0.01', value: it.price });
+  price.onchange = () => patchItem(it.id, { price: price.value === '' ? 0 : Number(price.value) });
+  row.append(price);
+
+  const sel = el('select', { className: 'ri-assign' });
+  sel.append(el('option', { value: '' }, 'Unassigned'));
+  sel.append(el('option', { value: 'shared' }, '🔀 Shared'));
+  for (const r of state.roommates) {
+    sel.append(el('option', { value: String(r.id) }, r.id === me.id ? `${r.name} (you)` : r.name));
+  }
+  sel.value = it.shared ? 'shared' : (it.assigned_to ? String(it.assigned_to) : '');
+  sel.onchange = () => {
+    const v = sel.value;
+    if (v === 'shared') patchItem(it.id, { shared: true, assigned_to: null });
+    else if (v === '') patchItem(it.id, { assigned_to: null, shared: false });
+    else patchItem(it.id, { assigned_to: Number(v) });
+  };
+  row.append(sel);
+
+  const del = el('button', { className: 'ri-del' }, '✕');
+  del.onclick = () => deleteReceiptItem(it.id);
+  row.append(del);
+  return row;
+}
+
+function settlementBox(receipt) {
+  const box = el('div', { className: 'settle' });
+  const buyerName = receipt.buyer_id === me.id ? 'you' : (receipt.buyer_name || 'the buyer');
+  box.append(el('h3', {}, `Who owes ${buyerName}`));
+
+  const { owed, unassigned } = computeSettlement(receipt);
+  const entries = state.roommates.filter((r) => (owed[r.id] || 0) > 0.005);
+
+  if (!entries.length) {
+    box.append(el('div', { className: 'settle-none' }, 'Assign items to people or mark them shared to see who owes what.'));
+  } else {
+    for (const r of entries) {
+      const rowEl = el('div', { className: 'settle-row' });
+      const who = r.id === me.id ? 'You owe' : `${r.name} owes`;
+      rowEl.append(el('span', {}, who));
+      rowEl.append(el('span', { className: 'amt' }, money(owed[r.id], receipt.currency)));
+      box.append(rowEl);
+    }
+  }
+  if (unassigned > 0.005) {
+    box.append(el('div', { className: 'settle-unassigned' }, `${money(unassigned, receipt.currency)} still unassigned`));
+  }
+  return box;
+}
+
+async function afterReceiptChange(id) {
+  if (id) {
+    try {
+      const receipt = await api(`/api/receipts/${id}`);
+      if (openReceiptId === receipt.id) renderReceiptDetail(receipt);
+    } catch { /* ignore */ }
+  }
+  await refreshReceipts();
+  if (currentView === 'split') render();
+}
+
+async function patchReceipt(id, body) {
+  try { await api(`/api/receipts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }); await afterReceiptChange(id); }
+  catch (err) { toast(err.message); }
+}
+async function patchItem(id, body) {
+  try { await api(`/api/receipt-items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }); await afterReceiptChange(openReceiptId); }
+  catch (err) { toast(err.message); }
+}
+async function addReceiptItem(id) {
+  try { await api(`/api/receipts/${id}/items`, { method: 'POST', body: JSON.stringify({ name: 'New item', price: 0 }) }); await afterReceiptChange(id); }
+  catch (err) { toast(err.message); }
+}
+async function deleteReceiptItem(id) {
+  try { await api(`/api/receipt-items/${id}`, { method: 'DELETE' }); await afterReceiptChange(openReceiptId); }
+  catch (err) { toast(err.message); }
+}
+async function deleteReceipt(id) {
+  if (!confirm('Delete this receipt?')) return;
+  try {
+    await api(`/api/receipts/${id}`, { method: 'DELETE' });
+    closeReceipt();
+    await refreshReceipts();
+    render();
+  } catch (err) { toast(err.message); }
+}
+
 // ---- wire up -------------------------------------------------------------
 function init() {
   $('#add-me-form').addEventListener('submit', onboardSubmit);
   $('#who-chip').addEventListener('click', switchUser);
-  $('#fab').addEventListener('click', openAddModal);
+  $('#fab').addEventListener('click', onFab);
   $('#cancel-add').addEventListener('click', closeAddModal);
   $('#add-item-form').addEventListener('submit', addItemSubmit);
   $('#add-modal').addEventListener('click', (e) => { if (e.target.id === 'add-modal') closeAddModal(); });
+  $('#receipt-file').addEventListener('change', onReceiptFile);
 
   document.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => { currentView = tab.dataset.view; render(); });
+    tab.addEventListener('click', async () => {
+      currentView = tab.dataset.view;
+      if (currentView === 'split') await refreshReceipts();
+      render();
+    });
   });
 
   const saved = localStorage.getItem(LS_KEY);

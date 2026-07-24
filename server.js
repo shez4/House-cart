@@ -1,13 +1,20 @@
 import express from 'express';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import db from './db.js';
+import { mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import db, { dataDir } from './db.js';
+import { parseReceipt, parsingEnabled } from './receipt-parser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DEFAULT_CURRENCY = process.env.HOUSECART_CURRENCY || '£';
 
-app.use(express.json());
+const uploadsDir = join(dataDir, 'uploads');
+mkdirSync(uploadsDir, { recursive: true });
+
+// Receipt images arrive as base64 JSON, so allow a larger body.
+app.use(express.json({ limit: '15mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
 // A friendly palette so each roommate gets a distinct colour dot.
@@ -84,6 +91,8 @@ app.get('/api/state', (_req, res) => {
   res.json({
     roommates: stmts.allRoommates.all(),
     items: stmts.allItems.all(),
+    parsing_enabled: parsingEnabled(),
+    default_currency: DEFAULT_CURRENCY,
   });
 });
 
@@ -150,6 +159,178 @@ app.patch('/api/items/:id', (req, res) => {
 
 app.delete('/api/items/:id', (req, res) => {
   stmts.deleteItem.run(Number(req.params.id));
+  res.status(204).end();
+});
+
+// ---- receipts -------------------------------------------------------------
+const rstmts = {
+  list: db.prepare(`
+    SELECT r.*, b.name AS buyer_name, b.color AS buyer_color,
+           (SELECT COUNT(*) FROM receipt_items ri WHERE ri.receipt_id = r.id) AS item_count
+    FROM receipts r
+    LEFT JOIN roommates b ON b.id = r.buyer_id
+    ORDER BY r.created_at DESC
+  `),
+  byId: db.prepare(`
+    SELECT r.*, b.name AS buyer_name, b.color AS buyer_color
+    FROM receipts r LEFT JOIN roommates b ON b.id = r.buyer_id
+    WHERE r.id = ?
+  `),
+  items: db.prepare(`
+    SELECT ri.*, a.name AS assigned_name, a.color AS assigned_color
+    FROM receipt_items ri
+    LEFT JOIN roommates a ON a.id = ri.assigned_to
+    WHERE ri.receipt_id = ?
+    ORDER BY ri.created_at, ri.id
+  `),
+  insert: db.prepare(`
+    INSERT INTO receipts (buyer_id, store, currency, total, purchased_at, image_file, parse_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  insertItem: db.prepare(`
+    INSERT INTO receipt_items (receipt_id, name, price) VALUES (?, ?, ?)
+  `),
+  itemById: db.prepare('SELECT * FROM receipt_items WHERE id = ?'),
+  deleteItem: db.prepare('DELETE FROM receipt_items WHERE id = ?'),
+};
+
+const IMG_EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
+
+function receiptWithItems(id) {
+  const receipt = rstmts.byId.get(id);
+  if (!receipt) return null;
+  receipt.items = rstmts.items.all(id);
+  return receipt;
+}
+
+app.get('/api/receipts', (_req, res) => {
+  const list = rstmts.list.all();
+  for (const r of list) r.items = rstmts.items.all(r.id); // needed for per-card split
+  res.json(list);
+});
+
+app.get('/api/receipts/:id', (req, res) => {
+  const receipt = receiptWithItems(Number(req.params.id));
+  if (!receipt) return asHttpError(res, 404, 'Receipt not found.');
+  res.json(receipt);
+});
+
+app.get('/api/receipts/:id/image', (req, res) => {
+  const receipt = rstmts.byId.get(Number(req.params.id));
+  if (!receipt || !receipt.image_file) return asHttpError(res, 404, 'No image.');
+  const path = join(uploadsDir, receipt.image_file);
+  if (!existsSync(path)) return asHttpError(res, 404, 'No image.');
+  res.sendFile(path);
+});
+
+// Create a receipt from a base64 image, then (if enabled) auto-parse line items.
+app.post('/api/receipts', async (req, res) => {
+  const b = req.body || {};
+  const buyerId = Number(b.buyer_id) || null;
+  if (!buyerId || !stmts.roommateById.get(buyerId)) {
+    return asHttpError(res, 400, 'A valid buyer is required.');
+  }
+
+  const mediaType = b.media_type || 'image/jpeg';
+  const base64 = (b.image_base64 || '').replace(/^data:[^,]+,/, '');
+  if (!base64) return asHttpError(res, 400, 'A receipt image is required.');
+
+  // Create the row first so we can key the image file by receipt id.
+  const { lastInsertRowid: id } = rstmts.insert.run(
+    buyerId, null, DEFAULT_CURRENCY, null, null, null, 'pending',
+  );
+
+  const filename = `${id}${IMG_EXT[mediaType] || '.jpg'}`;
+  try {
+    writeFileSync(join(uploadsDir, filename), Buffer.from(base64, 'base64'));
+    db.prepare('UPDATE receipts SET image_file = ? WHERE id = ?').run(filename, id);
+  } catch {
+    /* keep the receipt even if the image can't be written */
+  }
+
+  let parseStatus = 'disabled';
+  if (parsingEnabled()) {
+    try {
+      const parsed = await parseReceipt({ base64, mediaType });
+      db.prepare('UPDATE receipts SET store = ?, currency = ?, total = ?, purchased_at = ? WHERE id = ?')
+        .run(parsed.store || null, parsed.currency || DEFAULT_CURRENCY,
+             parsed.total || null, parsed.purchased_at || null, id);
+      const insertMany = db.transaction((rows) => {
+        for (const it of rows) rstmts.insertItem.run(id, it.name, it.price);
+      });
+      insertMany(parsed.items);
+      parseStatus = 'ok';
+    } catch (err) {
+      console.error('Receipt parse failed:', err.message);
+      parseStatus = 'error';
+    }
+  }
+
+  db.prepare('UPDATE receipts SET parse_status = ? WHERE id = ?').run(parseStatus, id);
+  res.status(201).json(receiptWithItems(id));
+});
+
+app.patch('/api/receipts/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const receipt = rstmts.byId.get(id);
+  if (!receipt) return asHttpError(res, 404, 'Receipt not found.');
+
+  const b = req.body || {};
+  const next = { ...receipt };
+  if ('buyer_id' in b) next.buyer_id = b.buyer_id == null ? null : Number(b.buyer_id);
+  if ('store' in b) next.store = (b.store || '').trim() || null;
+  if ('currency' in b) next.currency = (b.currency || '').trim() || null;
+  if ('total' in b) next.total = b.total == null || b.total === '' ? null : Number(b.total);
+  if ('purchased_at' in b) next.purchased_at = (b.purchased_at || '').trim() || null;
+
+  db.prepare('UPDATE receipts SET buyer_id = ?, store = ?, currency = ?, total = ?, purchased_at = ? WHERE id = ?')
+    .run(next.buyer_id, next.store, next.currency, next.total, next.purchased_at, id);
+  res.json(receiptWithItems(id));
+});
+
+app.delete('/api/receipts/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const receipt = rstmts.byId.get(id);
+  if (receipt?.image_file) {
+    const path = join(uploadsDir, receipt.image_file);
+    if (existsSync(path)) { try { unlinkSync(path); } catch { /* ignore */ } }
+  }
+  db.prepare('DELETE FROM receipts WHERE id = ?').run(id); // cascades to items
+  res.status(204).end();
+});
+
+app.post('/api/receipts/:id/items', (req, res) => {
+  const id = Number(req.params.id);
+  if (!rstmts.byId.get(id)) return asHttpError(res, 404, 'Receipt not found.');
+  const name = (req.body?.name || '').trim();
+  if (!name) return asHttpError(res, 400, 'Item name is required.');
+  const price = Number(req.body?.price) || 0;
+  const { lastInsertRowid } = rstmts.insertItem.run(id, name, price);
+  res.status(201).json(rstmts.itemById.get(lastInsertRowid));
+});
+
+app.patch('/api/receipt-items/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const item = rstmts.itemById.get(id);
+  if (!item) return asHttpError(res, 404, 'Item not found.');
+
+  const b = req.body || {};
+  const next = { ...item };
+  if ('name' in b) next.name = (b.name || '').trim() || item.name;
+  if ('price' in b) next.price = Number(b.price) || 0;
+  if ('shared' in b) next.shared = b.shared ? 1 : 0;
+  if ('assigned_to' in b) {
+    next.assigned_to = b.assigned_to == null ? null : Number(b.assigned_to);
+    if (next.assigned_to) next.shared = 0; // assigning to a person clears "shared"
+  }
+
+  db.prepare('UPDATE receipt_items SET name = ?, price = ?, assigned_to = ?, shared = ? WHERE id = ?')
+    .run(next.name, next.price, next.assigned_to, next.shared, id);
+  res.json(rstmts.itemById.get(id));
+});
+
+app.delete('/api/receipt-items/:id', (req, res) => {
+  rstmts.deleteItem.run(Number(req.params.id));
   res.status(204).end();
 });
 

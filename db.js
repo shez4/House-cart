@@ -36,6 +36,31 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     bought_at  TEXT
   );
+
+  -- A scanned/photographed receipt paid for by one roommate.
+  CREATE TABLE IF NOT EXISTS receipts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    buyer_id     INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+    store        TEXT,
+    currency     TEXT,
+    total        REAL,
+    purchased_at TEXT,
+    image_file   TEXT,
+    parse_status TEXT,          -- 'ok' | 'disabled' | 'error'
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One line item on a receipt, assignable to a roommate or shared.
+  CREATE TABLE IF NOT EXISTS receipt_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_id  INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    price       REAL NOT NULL DEFAULT 0,
+    assigned_to INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+    shared      INTEGER NOT NULL DEFAULT 0,   -- 1 = split evenly among everyone
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
+export { dataDir };
 export default db;

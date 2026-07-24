@@ -23,6 +23,28 @@ live on a small server and sync across everyone's devices.
 Lists refresh automatically every few seconds, so changes from other roommates
 show up on their own.
 
+### 🧾 Receipts & splitting
+
+After a shop, snap a photo of the receipt on the **Split** tab. If a Claude API
+key is configured, the app reads the receipt and pulls out each line item and
+price automatically; otherwise you add the items by hand. Then assign each item
+to a roommate — or mark it **Shared** to split it evenly — and the app shows
+**who owes the person who paid, and how much**. The receipt photo is kept so
+you can check it later.
+
+Auto-reading is powered by Claude's vision model via the official Anthropic
+SDK. Set `ANTHROPIC_API_KEY` to turn it on:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # enables auto-scan of receipts
+npm start
+```
+
+Without a key, everything still works — you just type the line items in
+yourself. Optional overrides: `HOUSECART_PARSE_MODEL` (defaults to
+`claude-opus-4-8`) and `HOUSECART_CURRENCY` (the currency symbol shown when a
+receipt doesn't specify one, defaults to `£`).
+
 ## Tech
 
 - **Backend:** Node.js + Express, with a SQLite database via the built-in
@@ -49,18 +71,27 @@ deployment with a persistent volume.
 
 ## API
 
-| Method | Path                 | Purpose                                  |
-| ------ | -------------------- | ---------------------------------------- |
-| GET    | `/api/state`         | Everything (roommates + items) in one call |
-| GET    | `/api/roommates`     | List roommates                           |
-| POST   | `/api/roommates`     | Add / join by name (idempotent)          |
-| DELETE | `/api/roommates/:id` | Remove a roommate                        |
-| GET    | `/api/items`         | List all items                           |
-| POST   | `/api/items`         | Add an item (house or personal)          |
-| PATCH  | `/api/items/:id`     | Edit, claim/unclaim, mark bought         |
-| DELETE | `/api/items/:id`     | Delete an item                           |
+| Method | Path                      | Purpose                                    |
+| ------ | ------------------------- | ------------------------------------------ |
+| GET    | `/api/state`              | Roommates + items + config in one call     |
+| GET    | `/api/roommates`          | List roommates                             |
+| POST   | `/api/roommates`          | Add / join by name (idempotent)            |
+| DELETE | `/api/roommates/:id`      | Remove a roommate                          |
+| GET    | `/api/items`              | List all items                             |
+| POST   | `/api/items`              | Add an item (house or personal)            |
+| PATCH  | `/api/items/:id`          | Edit, claim/unclaim, mark bought           |
+| DELETE | `/api/items/:id`          | Delete an item                             |
+| GET    | `/api/receipts`           | List receipts (with their line items)      |
+| POST   | `/api/receipts`           | Upload a receipt photo; auto-parse if on   |
+| GET    | `/api/receipts/:id`       | One receipt with its items                 |
+| GET    | `/api/receipts/:id/image` | The stored receipt photo                   |
+| PATCH  | `/api/receipts/:id`       | Edit store / buyer / total / date          |
+| DELETE | `/api/receipts/:id`       | Delete a receipt                           |
+| POST   | `/api/receipts/:id/items` | Add a line item                            |
+| PATCH  | `/api/receipt-items/:id`  | Edit / assign / mark shared a line item    |
+| DELETE | `/api/receipt-items/:id`  | Delete a line item                         |
 
 ## Ideas for later
 
-Categories/aisles, cost splitting (who paid / who owes), recurring staples, and
-multiple houses via a shared join code.
+Categories/aisles, running "who owes whom" balances across many receipts,
+recurring staples, and multiple houses via a shared join code.
