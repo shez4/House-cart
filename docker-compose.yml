@@ -13,7 +13,7 @@ services:
     environment:
       # Values come from a .env file next to this compose file (see .env.example).
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - HOUSECART_CURRENCY=${HOUSECART_CURRENCY:-£}
+      - HOUSECART_CURRENCY=${HOUSECART_CURRENCY:-}
       - HOUSECART_PARSE_MODEL=${HOUSECART_PARSE_MODEL:-claude-haiku-4-5}
     restart: unless-stopped
 

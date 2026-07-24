@@ -8,7 +8,7 @@ import { parseReceipt, parsingEnabled } from './receipt-parser.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DEFAULT_CURRENCY = process.env.HOUSECART_CURRENCY || '£';
+const DEFAULT_CURRENCY = process.env.HOUSECART_CURRENCY || '$';
 
 const uploadsDir = join(dataDir, 'uploads');
 mkdirSync(uploadsDir, { recursive: true });

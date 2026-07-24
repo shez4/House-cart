@@ -598,7 +598,7 @@ function receiptItemRow(receipt, it) {
   sel.append(el('option', { value: '' }, 'Unassigned'));
   sel.append(el('option', { value: 'shared' }, '🔀 Shared'));
   for (const r of state.roommates) {
-    sel.append(el('option', { value: String(r.id) }, r.id === me.id ? `${r.name} (you)` : r.name));
+    sel.append(el('option', { value: String(r.id) }, r.name));
   }
   sel.value = it.shared ? 'shared' : (it.assigned_to ? String(it.assigned_to) : '');
   sel.onchange = () => {

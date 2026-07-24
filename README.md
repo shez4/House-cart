@@ -44,7 +44,8 @@ Without a key, everything still works — you just type the line items in
 yourself. Optional overrides: `HOUSECART_PARSE_MODEL` (defaults to
 `claude-haiku-4-5`, a fast and inexpensive vision model — set it to
 `claude-opus-4-8` for maximum accuracy) and `HOUSECART_CURRENCY` (the currency
-symbol shown when a receipt doesn't specify one, defaults to `£`).
+symbol shown when a receipt doesn't specify one, defaults to `$` for New
+Zealand dollars — set to e.g. `NZ$`, `£`, or `€` to change it).
 
 ## Tech
 
