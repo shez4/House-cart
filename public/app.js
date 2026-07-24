@@ -8,6 +8,8 @@ let openReceiptId = null;      // id of the receipt whose detail modal is open
 let currentView = 'shopping';
 let pollTimer = null;
 let animating = false;         // pause polling while a row animates out
+let flashAddId = null;         // just-added item id -> row animates in
+let flashClaimId = null;       // just-claimed item id -> chip pops in
 
 // ---- tiny helpers --------------------------------------------------------
 const $ = (sel) => document.querySelector(sel);
@@ -209,7 +211,7 @@ function renderBought(view) {
 
 // ---- item row ------------------------------------------------------------
 function itemRow(item) {
-  const row = el('div', { className: 'row item-row' + (item.bought ? ' bought' : '') });
+  const row = el('div', { className: 'row item-row' + (item.bought ? ' bought' : '') + (item.id === flashAddId ? ' row-enter' : '') });
 
   const check = el('button', { className: 'check' + (item.bought ? ' done' : ''), title: item.bought ? 'Mark as not bought' : 'Mark as bought' });
   if (item.bought) check.textContent = '✓';
@@ -232,7 +234,7 @@ function itemRow(item) {
   if (item.bought && item.bought_by_name) {
     chips.append(el('span', { className: 'chip' }, `✓ ${item.bought_by_name === me.name ? 'you' : item.bought_by_name}`));
   } else if (item.claimed_by && item.claimed_by_name) {
-    chips.append(el('span', { className: 'chip claimed' }, `🛍️ ${item.claimed_by === me.id ? "you're getting this" : item.claimed_by_name + ' is getting this'}`));
+    chips.append(el('span', { className: 'chip claimed' + (item.id === flashClaimId ? ' chip-pop' : '') }, `🛍️ ${item.claimed_by === me.id ? "you're getting this" : item.claimed_by_name + ' is getting this'}`));
   }
   if (chips.children.length) main.append(chips);
 
@@ -249,7 +251,7 @@ function itemRow(item) {
     }
   }
   const del = el('button', { className: 'act destructive' }, 'Delete');
-  del.onclick = () => removeItem(item);
+  del.onclick = () => removeItem(item, row);
   actions.append(del);
   main.append(actions);
 
@@ -293,6 +295,7 @@ async function commitBought(item, nowBought) {
 }
 
 async function claim(item, roommateId) {
+  if (roommateId) flashClaimId = item.id; // pop the "getting this" chip in
   try {
     await api(`/api/items/${item.id}`, {
       method: 'PATCH',
@@ -300,14 +303,30 @@ async function claim(item, roommateId) {
     });
     await refresh();
   } catch (err) { toast(err.message); }
+  flashClaimId = null;
 }
 
-async function removeItem(item) {
+// Fix the row's height, then collapse it away; runs `after` when done.
+function collapseRow(row, after) {
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || !row) { after(); return; }
+  animating = true;
+  const h = row.offsetHeight;
+  row.style.height = `${h}px`;
+  void row.offsetHeight;
+  row.classList.add('leaving');
+  setTimeout(after, 300);
+}
+
+function removeItem(item, row) {
   if (!confirm(`Delete "${item.name}"?`)) return;
-  try {
-    await api(`/api/items/${item.id}`, { method: 'DELETE' });
-    await refresh();
-  } catch (err) { toast(err.message); }
+  collapseRow(row, async () => {
+    try {
+      await api(`/api/items/${item.id}`, { method: 'DELETE' });
+      await refresh();
+    } catch (err) { toast(err.message); await refresh(); }
+    finally { animating = false; }
+  });
 }
 
 async function clearBought() {
@@ -345,11 +364,13 @@ async function addItemSubmit(e) {
     added_by: me.id,
   };
   try {
-    await api('/api/items', { method: 'POST', body: JSON.stringify(payload) });
+    const created = await api('/api/items', { method: 'POST', body: JSON.stringify(payload) });
+    flashAddId = created?.id ?? null; // animate the new row in
     closeAddModal();
     toast('Added to the list');
     await refresh();
   } catch (err) { toast(err.message); }
+  flashAddId = null;
 }
 
 // ---- receipts / split ----------------------------------------------------
