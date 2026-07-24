@@ -26,6 +26,36 @@
     </div>
   </div>
 
+  <!-- Sign in with Google (auth mode) -->
+  <div id="signin" class="overlay center hidden">
+    <div class="onboard-card">
+      <div class="onboard-logo">🛒</div>
+      <h1>House-cart</h1>
+      <p>Sign in to see your house's lists.</p>
+      <div id="gbtn" class="gbtn"></div>
+      <div id="signin-note" class="muted signin-note"></div>
+    </div>
+  </div>
+
+  <!-- Create or join a house -->
+  <div id="house" class="overlay center hidden">
+    <div class="onboard-card">
+      <div class="onboard-logo">🏠</div>
+      <h1>Your house</h1>
+      <p id="house-hi" class="muted"></p>
+      <form id="create-house-form" class="add-me-form" autocomplete="off">
+        <input id="house-name" type="text" placeholder="Name your house…" maxlength="60" />
+        <button type="submit" class="btn btn-primary">Create</button>
+      </form>
+      <div class="or-sep"><span>or</span></div>
+      <form id="join-house-form" class="add-me-form" autocomplete="off">
+        <input id="house-code" type="text" placeholder="Enter a join code" maxlength="12" autocapitalize="characters" />
+        <button type="submit" class="btn btn-ghost">Join</button>
+      </form>
+      <button id="house-signout" type="button" class="text-btn signout-link">Sign out</button>
+    </div>
+  </div>
+
   <!-- App shell -->
   <div id="app" class="app hidden">
     <header class="navbar">
@@ -67,6 +97,9 @@
   <!-- Receipt detail / assignment sheet (built dynamically) -->
   <div id="receipt-modal" class="overlay hidden"></div>
 
+  <!-- Account sheet (Google mode, built dynamically) -->
+  <div id="account-modal" class="overlay hidden"></div>
+
   <!-- Scanning spinner -->
   <div id="scanning" class="overlay center hidden">
     <div class="scan-card">
@@ -100,6 +133,8 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Google Identity Services (used only when Google sign-in is configured) -->
+  <script src="https://accounts.google.com/gsi/client" async></script>
   <script src="app.js"></script>
 </body>
 </html>

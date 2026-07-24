@@ -12,6 +12,7 @@ services:
       - housecart_data:/data # persistent DB + uploaded receipt images
     environment:
       # Values come from a .env file next to this compose file (see .env.example).
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - HOUSECART_CURRENCY=${HOUSECART_CURRENCY:-}
       - HOUSECART_PARSE_MODEL=${HOUSECART_PARSE_MODEL:-claude-haiku-4-5}

@@ -18,7 +18,7 @@ live on a small server and sync across everyone's devices.
 - **Mark as bought** – tap to check items off; see who bought what.
 - **Quantity & notes** – e.g. "2L milk, semi-skimmed".
 - **Bought tab** – review recent purchases and clear them out.
-- **No passwords** – everyone just picks their name to join the house.
+- **Sign in** – simple no-password name-picker by default, or **Sign in with Google** with private houses joined by an invite code (see below).
 
 Lists refresh automatically every few seconds, so changes from other roommates
 show up on their own.
@@ -70,6 +70,31 @@ devices reach it, run it on a machine/host they can access and share the URL
 The database is stored at `data/house-cart.db` (created automatically, ignored
 by git). Set `HOUSECART_DATA_DIR` to store it elsewhere — useful for
 deployment with a persistent volume.
+
+## Sign in with Google (optional)
+
+By default the app uses a friendly no-password **name-picker** — fine on a
+trusted home network. For a secure, organized setup, turn on **Sign in with
+Google**: each roommate signs in with their real Gmail, and houses are private
+and joined by an **invite code**.
+
+How it works once enabled:
+- The first person signs in and **creates a house** (gets a 6-character invite code).
+- They share that code; other roommates **sign in and enter the code** to join.
+- Each house's lists and receipts are private to its members.
+
+To enable it:
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
+   create an **OAuth 2.0 Client ID** of type **Web application**.
+2. Under **Authorized JavaScript origins**, add the HTTPS URL where your app is
+   served (e.g. `https://house.example.com`). Google requires HTTPS — this is
+   why the app needs to be deployed (see below) before sign-in works; it won't
+   run on a bare IP or plain `http`.
+3. Set the resulting Client ID as the `GOOGLE_CLIENT_ID` environment variable
+   (in your `.env`) and restart.
+
+Leave `GOOGLE_CLIENT_ID` unset to keep the simple name-picker.
 
 ## Deploy — use it from anywhere
 
@@ -135,6 +160,11 @@ Fly prints a public `https://<app>.fly.dev` URL. Always set the API key as a
 
 | Method | Path                      | Purpose                                    |
 | ------ | ------------------------- | ------------------------------------------ |
+| GET    | `/api/session`            | Auth mode + who's signed in + house        |
+| POST   | `/auth/google`            | Verify a Google token, start a session     |
+| POST   | `/auth/logout`            | End the session                            |
+| POST   | `/api/houses`             | Create a house (returns invite code)       |
+| POST   | `/api/houses/join`        | Join a house by invite code                |
 | GET    | `/api/state`              | Roommates + items + config in one call     |
 | GET    | `/api/roommates`          | List roommates                             |
 | POST   | `/api/roommates`          | Add / join by name (idempotent)            |

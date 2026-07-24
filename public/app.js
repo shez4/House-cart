@@ -10,6 +10,10 @@ let pollTimer = null;
 let animating = false;         // pause polling while a row animates out
 let flashAddId = null;         // just-added item id -> row animates in
 let flashClaimId = null;       // just-claimed item id -> chip pops in
+let authMode = 'open';         // 'open' (name-picker) or 'google'
+let session = null;            // last /api/session payload
+let house = null;              // { name, join_code } when signed into a house
+let pendingGoogleClientId = null;
 
 // ---- tiny helpers --------------------------------------------------------
 const $ = (sel) => document.querySelector(sel);
@@ -27,7 +31,9 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let msg = 'Something went wrong.';
     try { msg = (await res.json()).error || msg; } catch { /* ignore */ }
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -42,11 +48,16 @@ function toast(msg) {
 
 // ---- data ----------------------------------------------------------------
 async function refresh() {
-  state = await api('/api/state');
+  try {
+    state = await api('/api/state');
+  } catch (err) {
+    if (err.status === 401 || err.status === 403) return bootstrap(); // session/house changed
+    throw err;
+  }
   // Keep our own identity fresh (name/colour may change server-side).
   if (me) {
     const mine = state.roommates.find((r) => r.id === me.id);
-    if (mine) { me = mine; localStorage.setItem(LS_KEY, JSON.stringify(me)); }
+    if (mine) { me = mine; if (authMode === 'open') localStorage.setItem(LS_KEY, JSON.stringify(me)); }
   }
   if (currentView === 'split') await refreshReceipts();
   if (me) render();
@@ -66,6 +77,8 @@ function startPolling() {
 function showOnboarding() {
   $('#app').classList.add('hidden');
   $('#add-modal').classList.add('hidden');
+  $('#signin').classList.add('hidden');
+  $('#house').classList.add('hidden');
   const overlay = $('#onboarding');
   overlay.classList.remove('hidden');
 
@@ -92,17 +105,27 @@ async function onboardSubmit(e) {
   } catch (err) { toast(err.message); }
 }
 
-function setMe(r) {
-  me = r;
-  localStorage.setItem(LS_KEY, JSON.stringify(me));
-  $('#onboarding').classList.add('hidden');
+function hideOverlays() {
+  ['#onboarding', '#signin', '#house'].forEach((s) => $(s).classList.add('hidden'));
+}
+function enterApp() {
+  hideOverlays();
   $('#app').classList.remove('hidden');
   render();
 }
 
+// Open-mode: pick a name to become that roommate.
+function setMe(r) {
+  me = r;
+  localStorage.setItem(LS_KEY, JSON.stringify(me));
+  enterApp();
+}
+
+// Open-mode "switch user"; in Google mode the chip opens the account sheet.
 function switchUser() {
   me = null;
   localStorage.removeItem(LS_KEY);
+  $('#app').classList.add('hidden');
   refresh().then(showOnboarding);
 }
 
@@ -722,15 +745,156 @@ async function deleteReceipt(id) {
   } catch (err) { toast(err.message); }
 }
 
+// ---- sign-in & house (Google mode) ---------------------------------------
+function darkMode() { return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches; }
+
+function showSignin(s) {
+  hideOverlays();
+  $('#app').classList.add('hidden');
+  $('#signin').classList.remove('hidden');
+  renderGoogleButton(s.google_client_id);
+}
+
+function renderGoogleButton(clientId) {
+  const box = $('#gbtn');
+  const note = $('#signin-note');
+  if (!(window.google && google.accounts && google.accounts.id)) {
+    pendingGoogleClientId = clientId;           // onGoogleLibraryLoad will retry
+    note.textContent = 'Loading Google sign-in…';
+    return;
+  }
+  pendingGoogleClientId = null;
+  note.textContent = '';
+  box.innerHTML = '';
+  google.accounts.id.initialize({ client_id: clientId, callback: onGoogleCredential });
+  google.accounts.id.renderButton(box, {
+    theme: darkMode() ? 'filled_black' : 'outline',
+    size: 'large', shape: 'pill', text: 'signin_with', width: 260,
+  });
+}
+// Called by the Google Identity Services script once it finishes loading.
+window.onGoogleLibraryLoad = () => { if (pendingGoogleClientId) renderGoogleButton(pendingGoogleClientId); };
+
+async function onGoogleCredential(response) {
+  try {
+    await api('/auth/google', { method: 'POST', body: JSON.stringify({ credential: response.credential }) });
+    await bootstrap();
+  } catch (err) { $('#signin-note').textContent = err.message || 'Sign-in failed.'; }
+}
+
+function showHouseScreen(s) {
+  hideOverlays();
+  $('#app').classList.add('hidden');
+  $('#house').classList.remove('hidden');
+  $('#house-hi').textContent = `Signed in as ${s.user?.name || s.user?.email || 'you'}.`;
+  $('#house-name').value = '';
+  $('#house-code').value = '';
+}
+
+async function createHouse(e) {
+  e.preventDefault();
+  const name = $('#house-name').value.trim();
+  try { await api('/api/houses', { method: 'POST', body: JSON.stringify({ name }) }); await bootstrap(); }
+  catch (err) { toast(err.message); }
+}
+async function joinHouse(e) {
+  e.preventDefault();
+  const code = $('#house-code').value.trim();
+  if (!code) return;
+  try { await api('/api/houses/join', { method: 'POST', body: JSON.stringify({ code }) }); await bootstrap(); }
+  catch (err) { toast(err.message); }
+}
+async function signOut() {
+  try { await api('/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
+  me = null; house = null;
+  closeAccount();
+  await bootstrap();
+}
+
+// Account sheet (Google mode) — shows the house, invite code, and sign out.
+function openAccount() {
+  if (authMode !== 'google') { switchUser(); return; }
+  const modal = $('#account-modal');
+  modal.innerHTML = '';
+  const wrap = el('div', { className: 'sheet' });
+  wrap.append(el('div', { className: 'grabber' }));
+
+  const head = el('div', { className: 'acct-head' });
+  head.append(avatar(me, 46));
+  const who = el('div', {});
+  who.append(el('div', { className: 'acct-name' }, me.name));
+  if (session?.user?.email) who.append(el('div', { className: 'acct-email' }, session.user.email));
+  head.append(who);
+  wrap.append(head);
+
+  const body = el('div', { className: 'acct-body' });
+  if (house) {
+    body.append(el('div', { className: 'grp-header' }, 'House'));
+    const g = el('div', { className: 'grp' });
+    g.append(el('div', { className: 'acct-row' }, el('span', {}, 'Name'), el('span', { className: 'acct-val' }, house.name)));
+    const codeRow = el('div', { className: 'acct-row tap' });
+    codeRow.append(el('span', {}, 'Invite code'), el('span', { className: 'acct-code' }, house.join_code));
+    codeRow.onclick = () => copyCode(house.join_code);
+    g.append(codeRow);
+    body.append(g);
+    body.append(el('div', { className: 'acct-hint' }, 'Share this code so flatmates can join your house.'));
+  }
+  const out = el('button', { className: 'rd-delete' }, 'Sign out');
+  out.onclick = signOut;
+  body.append(el('div', { style: 'height:16px' }), out);
+  wrap.append(body);
+
+  modal.append(wrap);
+  modal.classList.remove('hidden');
+  modal.onclick = (e) => { if (e.target === modal) closeAccount(); };
+}
+function closeAccount() { const m = $('#account-modal'); m.classList.add('hidden'); m.innerHTML = ''; }
+function copyCode(code) {
+  try { navigator.clipboard.writeText(code).then(() => toast('Invite code copied'), () => toast(`Code: ${code}`)); }
+  catch { toast(`Code: ${code}`); }
+}
+
+// ---- bootstrap -----------------------------------------------------------
+async function bootstrap() {
+  let s;
+  try { s = await api('/api/session'); }
+  catch { toast('Could not reach the server.'); return; }
+  session = s;
+  closeAccount();
+
+  if (!s.auth_enabled) {                 // open mode: name-picker
+    authMode = 'open';
+    const saved = localStorage.getItem(LS_KEY);
+    try { me = saved ? JSON.parse(saved) : null; } catch { me = null; }
+    await refresh();
+    if (me && !state.roommates.find((r) => r.id === me.id)) me = null;
+    if (me) enterApp(); else showOnboarding();
+    startPolling();
+    return;
+  }
+
+  authMode = 'google';
+  if (!s.signed_in) { showSignin(s); return; }
+  if (!s.in_house) { showHouseScreen(s); return; }
+  me = s.me;
+  house = s.house;
+  await refresh();
+  enterApp();
+  startPolling();
+}
+
 // ---- wire up -------------------------------------------------------------
 function init() {
   $('#add-me-form').addEventListener('submit', onboardSubmit);
-  $('#user-chip').addEventListener('click', switchUser);
+  $('#user-chip').addEventListener('click', openAccount);
   $('#nav-add').addEventListener('click', onFab);
   $('#cancel-add').addEventListener('click', closeAddModal);
   $('#add-item-form').addEventListener('submit', addItemSubmit);
   $('#add-modal').addEventListener('click', (e) => { if (e.target.id === 'add-modal') closeAddModal(); });
   $('#receipt-file').addEventListener('change', onReceiptFile);
+  $('#create-house-form').addEventListener('submit', createHouse);
+  $('#join-house-form').addEventListener('submit', joinHouse);
+  $('#house-signout').addEventListener('click', signOut);
 
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', async () => {
@@ -740,20 +904,7 @@ function init() {
     });
   });
 
-  const saved = localStorage.getItem(LS_KEY);
-  if (saved) { try { me = JSON.parse(saved); } catch { me = null; } }
-
-  refresh()
-    .then(() => {
-      // Validate stored identity still exists on the server.
-      if (me && !state.roommates.find((r) => r.id === me.id)) me = null;
-      if (me) setMe(me); else showOnboarding();
-      startPolling();
-    })
-    .catch(() => {
-      toast('Could not reach the server.');
-      showOnboarding();
-    });
+  bootstrap();
 }
 
 document.addEventListener('DOMContentLoaded', init);
