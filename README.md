@@ -42,8 +42,9 @@ npm start
 
 Without a key, everything still works — you just type the line items in
 yourself. Optional overrides: `HOUSECART_PARSE_MODEL` (defaults to
-`claude-opus-4-8`) and `HOUSECART_CURRENCY` (the currency symbol shown when a
-receipt doesn't specify one, defaults to `£`).
+`claude-haiku-4-5`, a fast and inexpensive vision model — set it to
+`claude-opus-4-8` for maximum accuracy) and `HOUSECART_CURRENCY` (the currency
+symbol shown when a receipt doesn't specify one, defaults to `£`).
 
 ## Tech
 
@@ -68,6 +69,29 @@ devices reach it, run it on a machine/host they can access and share the URL
 The database is stored at `data/house-cart.db` (created automatically, ignored
 by git). Set `HOUSECART_DATA_DIR` to store it elsewhere — useful for
 deployment with a persistent volume.
+
+## Deploy — use it from anywhere
+
+The app is a container: a `Dockerfile` is included, so it runs on any host that
+takes a Docker image (Fly.io, Railway, Render, a VPS, …). The only requirement
+is a **persistent volume** mounted at `HOUSECART_DATA_DIR` (default `/data` in
+the image) so the shared list and receipt images survive restarts.
+
+**Fly.io** (recommended — free allowance, keeps data on a volume). A `fly.toml`
+is included. After installing [flyctl](https://fly.io/docs/flyctl/install):
+
+```bash
+fly launch --no-deploy                        # creates the app (keep the fly.toml)
+fly volumes create housecart_data --size 1    # 1 GB persistent disk
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...  # optional: turns on receipt auto-scan
+fly deploy
+```
+
+Fly prints a public `https://<app>.fly.dev` URL — share that with your
+roommates. Set the API key as a **secret** (as above), never in `fly.toml`.
+
+On other hosts, point them at the `Dockerfile`, attach a volume at `/data`, and
+set `ANTHROPIC_API_KEY` in the host's environment.
 
 ## API
 

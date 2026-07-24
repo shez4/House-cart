@@ -1,0 +1,30 @@
+# Fly.io deployment config for House-cart.
+#
+# One-time setup (install flyctl first: https://fly.io/docs/flyctl/install):
+#   fly launch --no-deploy                          # creates the app, keep this file
+#   fly volumes create housecart_data --size 1      # 1 GB persistent disk
+#   fly secrets set ANTHROPIC_API_KEY=sk-ant-...     # (optional) enables receipt auto-scan
+#   fly deploy
+#
+# Afterwards, `fly deploy` redeploys and the data on the volume is preserved.
+
+app = "house-cart"
+primary_region = "lhr"   # change to a region near you: `fly platform regions`
+
+[build]
+
+[env]
+  PORT = "3000"
+  HOUSECART_DATA_DIR = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0   # scales to zero when idle; bump to 1 for no cold starts
+
+# Persistent disk for the SQLite database and receipt images.
+[[mounts]]
+  source = "housecart_data"
+  destination = "/data"

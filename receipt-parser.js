@@ -2,7 +2,7 @@
 // Falls back gracefully: if ANTHROPIC_API_KEY isn't set, parsing is "disabled"
 // and the app lets the user type line items in by hand instead.
 
-const MODEL = process.env.HOUSECART_PARSE_MODEL || 'claude-opus-4-8';
+const MODEL = process.env.HOUSECART_PARSE_MODEL || 'claude-haiku-4-5';
 
 // Structured-output schema: every field required, no nullable unions (kept
 // simple so it's reliably accepted). Unknowns come back as "" or 0.
@@ -55,12 +55,13 @@ export async function parseReceipt({ base64, mediaType }) {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
 
+  // Structured outputs guarantee parseable JSON. No thinking/effort params:
+  // the default model (Haiku 4.5) doesn't accept them, and receipt reading is
+  // a perception task that doesn't need them.
   const message = await client.messages.create({
     model: MODEL,
-    max_tokens: 8000,
-    thinking: { type: 'adaptive' },
+    max_tokens: 4096,
     output_config: {
-      effort: 'medium',
       format: { type: 'json_schema', schema: RECEIPT_SCHEMA },
     },
     messages: [
