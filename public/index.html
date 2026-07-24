@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#16a34a" />
+  <title>House-cart 🛒</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>" />
+</head>
+<body>
+  <!-- Who are you? overlay -->
+  <div id="onboarding" class="overlay hidden">
+    <div class="onboard-card">
+      <div class="onboard-logo">🛒</div>
+      <h1>House-cart</h1>
+      <p class="muted">Who's using this? Pick your name or add yourself to the house.</p>
+      <div id="roommate-picker" class="roommate-picker"></div>
+      <form id="add-me-form" class="add-me-form" autocomplete="off">
+        <input id="new-roommate-name" type="text" placeholder="Add your name…" maxlength="40" />
+        <button type="submit" class="btn btn-primary">Join</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- App shell -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">🛒 <span>House-cart</span></div>
+      <button id="who-chip" class="who-chip" title="Switch user"></button>
+    </header>
+
+    <main id="view" class="view"></main>
+
+    <!-- Floating add button -->
+    <button id="fab" class="fab" aria-label="Add item">＋</button>
+
+    <nav class="tabbar">
+      <button class="tab is-active" data-view="shopping"><span>🛒</span>Shopping</button>
+      <button class="tab" data-view="house"><span>🏠</span>House</button>
+      <button class="tab" data-view="mine"><span>🙋</span>Mine</button>
+      <button class="tab" data-view="bought"><span>✅</span>Bought</button>
+    </nav>
+  </div>
+
+  <!-- Add-item modal -->
+  <div id="add-modal" class="overlay hidden">
+    <div class="modal">
+      <h2>Add an item</h2>
+      <form id="add-item-form" autocomplete="off">
+        <label>Item
+          <input id="item-name" type="text" placeholder="e.g. Milk" maxlength="80" required />
+        </label>
+        <div class="row">
+          <label class="grow">Quantity
+            <input id="item-qty" type="text" placeholder="e.g. 2L" maxlength="40" />
+          </label>
+        </div>
+        <label>Note
+          <input id="item-note" type="text" placeholder="e.g. semi-skimmed, any brand" maxlength="120" />
+        </label>
+        <fieldset class="dest">
+          <legend>Add to</legend>
+          <label class="radio"><input type="radio" name="dest" value="house" checked /> 🏠 House list</label>
+          <label class="radio"><input type="radio" name="dest" value="personal" /> 🙋 My personal list</label>
+        </fieldset>
+        <div class="modal-actions">
+          <button type="button" id="cancel-add" class="btn btn-ghost">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add item</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

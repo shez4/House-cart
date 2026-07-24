@@ -1,0 +1,16 @@
+{
+  "name": "house-cart",
+  "version": "1.0.0",
+  "description": "Shared grocery list for roommates — house list + each roommate's personal list, so whoever is out shopping knows exactly what to grab.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.22.2"
+  }
+}
