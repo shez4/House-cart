@@ -7,6 +7,7 @@ let receipts = [];             // list of receipts (with items) for the Split ta
 let openReceiptId = null;      // id of the receipt whose detail modal is open
 let currentView = 'shopping';
 let pollTimer = null;
+let animating = false;         // pause polling while a row animates out
 
 // ---- tiny helpers --------------------------------------------------------
 const $ = (sel) => document.querySelector(sel);
@@ -56,7 +57,7 @@ async function refreshReceipts() {
 
 function startPolling() {
   clearInterval(pollTimer);
-  pollTimer = setInterval(() => { refresh().catch(() => {}); }, 4000);
+  pollTimer = setInterval(() => { if (!animating) refresh().catch(() => {}); }, 4000);
 }
 
 // ---- onboarding ----------------------------------------------------------
@@ -212,7 +213,7 @@ function itemRow(item) {
 
   const check = el('button', { className: 'check' + (item.bought ? ' done' : ''), title: item.bought ? 'Mark as not bought' : 'Mark as bought' });
   if (item.bought) check.textContent = '✓';
-  check.onclick = () => toggleBought(item);
+  check.onclick = () => toggleBought(item, row, check);
   row.append(check);
 
   const main = el('div', { className: 'row-main' });
@@ -257,15 +258,38 @@ function itemRow(item) {
 }
 
 // ---- mutations -----------------------------------------------------------
-async function toggleBought(item) {
+// Ticking an item always removes it from the current view (bought items live on
+// the Bought tab). Pop the tick, collapse the row away, then commit + refresh.
+function toggleBought(item, row, check) {
+  const nowBought = !item.bought;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || !row) { commitBought(item, nowBought); return; }
+
+  animating = true;
+  if (nowBought) { check.classList.add('done', 'pop'); check.textContent = '✓'; }
+  else { check.classList.remove('done'); check.textContent = ''; }
+
+  const h = row.offsetHeight;
+  row.style.height = `${h}px`;
+  void row.offsetHeight; // commit the fixed height before collapsing
+  setTimeout(() => row.classList.add('leaving'), nowBought ? 200 : 60);
+  setTimeout(() => commitBought(item, nowBought), nowBought ? 480 : 360);
+}
+
+async function commitBought(item, nowBought) {
   try {
     await api(`/api/items/${item.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ bought: !item.bought, bought_by: me.id }),
+      body: JSON.stringify({ bought: nowBought, bought_by: me.id }),
     });
-    toast(item.bought ? 'Back on the list' : `Got it! ✅`);
+    toast(nowBought ? 'Moved to Bought ✓' : 'Back on the list');
     await refresh();
-  } catch (err) { toast(err.message); }
+  } catch (err) {
+    toast(err.message);
+    await refresh();
+  } finally {
+    animating = false;
+  }
 }
 
 async function claim(item, roommateId) {
