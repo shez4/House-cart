@@ -70,7 +70,7 @@ function showOnboarding() {
   picker.innerHTML = '';
   for (const r of state.roommates) {
     const btn = el('button', { className: 'pick-btn', type: 'button' });
-    btn.append(dot(r.color), r.name);
+    btn.append(avatar(r, 26), r.name);
     btn.onclick = () => setMe(r);
     picker.append(btn);
   }
@@ -108,18 +108,30 @@ function dot(color) {
   return el('span', { className: 'dot', style: `background:${color}` });
 }
 
-function render() {
-  // who chip
-  const chip = $('#who-chip');
-  chip.innerHTML = '';
-  chip.append(dot(me.color), me.name);
+// Circular initial avatar (iOS-style), used in the nav bar and pickers.
+function avatar(r, size = 30) {
+  const a = el('span', {
+    className: 'avatar',
+    style: `background:${r?.color || 'var(--tab-inactive)'};width:${size}px;height:${size}px;font-size:${Math.round(size * 0.44)}px`,
+  });
+  a.setAttribute('aria-hidden', 'true'); // decorative initial; keep it out of accessible names
+  a.textContent = (r?.name || '?').trim().charAt(0).toUpperCase();
+  return a;
+}
 
-  // active tab
+const VIEW_TITLES = { shopping: 'Shopping', house: 'House', mine: 'My List', bought: 'Bought', split: 'Split' };
+
+function render() {
+  const chip = $('#user-chip');
+  chip.innerHTML = '';
+  chip.append(avatar(me), el('span', { className: 'user-name' }, me.name));
+
   document.querySelectorAll('.tab').forEach((t) =>
     t.classList.toggle('is-active', t.dataset.view === currentView));
 
   const view = $('#view');
   view.innerHTML = '';
+  view.append(el('div', { className: 'large-title' }, VIEW_TITLES[currentView]));
   ({
     shopping: renderShopping,
     house: renderHouse,
@@ -129,15 +141,26 @@ function render() {
   })[currentView](view);
 }
 
-function sectionHead(title, count) {
-  const head = el('div', { className: 'section-head' }, el('h2', {}, title));
-  head.append(el('span', { className: 'count' }, String(count)));
-  return head;
+function grpHeader(text) {
+  return el('div', { className: 'grp-header' }, text);
 }
 
-function emptyState(emoji, text) {
+// Wrap rows in a single rounded iOS list-group card.
+function grp(rows) {
+  const g = el('div', { className: 'grp' });
+  rows.forEach((r) => g.append(r));
+  return g;
+}
+
+function countLabel(n) {
+  return `${n} ${n === 1 ? 'item' : 'items'}`;
+}
+
+function emptyState(glyph, title, sub) {
   const box = el('div', { className: 'empty' });
-  box.append(el('span', { className: 'big' }, emoji), el('div', {}, text));
+  box.append(el('div', { className: 'empty-glyph' }, glyph));
+  box.append(el('div', { className: 'empty-title' }, title));
+  if (sub) box.append(el('div', { className: 'empty-sub' }, sub));
   return box;
 }
 
@@ -145,72 +168,60 @@ function emptyState(emoji, text) {
 function renderShopping(view) {
   const active = state.items.filter((i) => !i.bought);
   if (active.length === 0) {
-    view.append(emptyState('🎉', 'Nothing to buy right now. You\'re all stocked up!'));
+    view.append(emptyState('🛒', 'All stocked up', 'Nothing on any list right now.'));
     return;
   }
 
   const house = active.filter((i) => i.list_type === 'house');
   if (house.length) {
-    view.append(sectionHead('🏠 House', house.length));
-    house.forEach((i) => view.append(itemCard(i)));
+    view.append(grpHeader('🏠 House'), grp(house.map((i) => itemRow(i))));
   }
 
   for (const r of state.roommates) {
     const personal = active.filter((i) => i.list_type === 'personal' && i.owner_id === r.id);
     if (!personal.length) continue;
     const label = r.id === me.id ? '🙋 Your list' : `🙋 ${r.name}'s list`;
-    view.append(sectionHead(label, personal.length));
-    personal.forEach((i) => view.append(itemCard(i)));
+    view.append(grpHeader(label), grp(personal.map((i) => itemRow(i))));
   }
 }
 
 function renderHouse(view) {
   const items = state.items.filter((i) => i.list_type === 'house' && !i.bought);
-  view.append(sectionHead('🏠 House list', items.length));
-  if (!items.length) { view.append(emptyState('🏠', 'The house list is empty. Tap ＋ to add something.')); return; }
-  items.forEach((i) => view.append(itemCard(i)));
+  if (!items.length) { view.append(emptyState('🏠', 'House list is empty', 'Tap ＋ to add something the house needs.')); return; }
+  view.append(grpHeader(countLabel(items.length)), grp(items.map((i) => itemRow(i))));
 }
 
 function renderMine(view) {
   const items = state.items.filter((i) => i.list_type === 'personal' && i.owner_id === me.id && !i.bought);
-  view.append(sectionHead('🙋 My personal list', items.length));
-  if (!items.length) { view.append(emptyState('🙋', 'Nothing personal yet. Tap ＋ and choose "My personal list".')); return; }
-  items.forEach((i) => view.append(itemCard(i)));
+  if (!items.length) { view.append(emptyState('🙋', 'Nothing here yet', 'Tap ＋ and choose “My List”.')); return; }
+  view.append(grpHeader(countLabel(items.length)), grp(items.map((i) => itemRow(i))));
 }
 
 function renderBought(view) {
   const items = state.items.filter((i) => i.bought);
-  const head = el('div', { className: 'section-head' }, el('h2', {}, '✅ Bought'));
-  head.append(el('span', { className: 'count' }, String(items.length)));
-  view.append(head);
-  if (!items.length) { view.append(emptyState('🛒', 'Nothing bought yet.')); return; }
-
-  const clear = el('button', { className: 'mini-btn danger', style: 'margin:0 4px 12px' }, 'Clear all bought');
+  if (!items.length) { view.append(emptyState('✅', 'Nothing bought yet', 'Items you check off show up here.')); return; }
+  view.append(grpHeader(countLabel(items.length)), grp(items.map((i) => itemRow(i))));
+  const clear = el('button', { className: 'text-btn destructive', style: 'margin:14px 6px' }, 'Clear all bought');
   clear.onclick = clearBought;
   view.append(clear);
-
-  items.forEach((i) => view.append(itemCard(i)));
 }
 
-// ---- item card -----------------------------------------------------------
-function itemCard(item) {
-  const card = el('div', { className: 'item' + (item.bought ? ' bought' : '') });
+// ---- item row ------------------------------------------------------------
+function itemRow(item) {
+  const row = el('div', { className: 'row item-row' + (item.bought ? ' bought' : '') });
 
-  // check circle
   const check = el('button', { className: 'check' + (item.bought ? ' done' : ''), title: item.bought ? 'Mark as not bought' : 'Mark as bought' });
   if (item.bought) check.textContent = '✓';
   check.onclick = () => toggleBought(item);
-  card.append(check);
+  row.append(check);
 
-  // body
-  const body = el('div', { className: 'item-body' });
+  const main = el('div', { className: 'row-main' });
   const title = el('div', { className: 'item-title' });
   if (item.quantity) title.append(el('span', { className: 'qty' }, item.quantity));
   title.append(item.name);
-  body.append(title);
-  if (item.note) body.append(el('div', { className: 'item-note' }, item.note));
+  main.append(title);
+  if (item.note) main.append(el('div', { className: 'item-note' }, item.note));
 
-  // chips
   const chips = el('div', { className: 'chips' });
   if (item.list_type === 'personal' && item.owner_name) {
     const c = el('span', { className: 'chip' });
@@ -218,40 +229,31 @@ function itemCard(item) {
     chips.append(c);
   }
   if (item.bought && item.bought_by_name) {
-    chips.append(el('span', { className: 'chip' }, `✅ ${item.bought_by_name === me.name ? 'you' : item.bought_by_name}`));
+    chips.append(el('span', { className: 'chip' }, `✓ ${item.bought_by_name === me.name ? 'you' : item.bought_by_name}`));
   } else if (item.claimed_by && item.claimed_by_name) {
-    const c = el('span', { className: 'chip claimed' });
-    c.append(`🛍️ ${item.claimed_by === me.id ? "you're getting this" : item.claimed_by_name + ' is getting this'}`);
-    chips.append(c);
+    chips.append(el('span', { className: 'chip claimed' }, `🛍️ ${item.claimed_by === me.id ? "you're getting this" : item.claimed_by_name + ' is getting this'}`));
   }
-  if (chips.children.length) body.append(chips);
+  if (chips.children.length) main.append(chips);
 
-  // actions (hidden once bought)
+  const actions = el('div', { className: 'row-actions' });
   if (!item.bought) {
-    const actions = el('div', { className: 'item-actions' });
     if (!item.claimed_by) {
-      const b = el('button', { className: 'mini-btn primary' }, "I'll get it");
+      const b = el('button', { className: 'act' }, "I'll get it");
       b.onclick = () => claim(item, me.id);
       actions.append(b);
     } else if (item.claimed_by === me.id) {
-      const b = el('button', { className: 'mini-btn' }, 'Unclaim');
+      const b = el('button', { className: 'act' }, 'Unclaim');
       b.onclick = () => claim(item, null);
       actions.append(b);
     }
-    const del = el('button', { className: 'mini-btn danger' }, 'Delete');
-    del.onclick = () => removeItem(item);
-    actions.append(del);
-    body.append(actions);
-  } else {
-    const actions = el('div', { className: 'item-actions' });
-    const del = el('button', { className: 'mini-btn danger' }, 'Delete');
-    del.onclick = () => removeItem(item);
-    actions.append(del);
-    body.append(actions);
   }
+  const del = el('button', { className: 'act destructive' }, 'Delete');
+  del.onclick = () => removeItem(item);
+  actions.append(del);
+  main.append(actions);
 
-  card.append(body);
-  return card;
+  row.append(main);
+  return row;
 }
 
 // ---- mutations -----------------------------------------------------------
@@ -357,44 +359,48 @@ function computeSettlement(receipt) {
 }
 
 function renderSplit(view) {
-  const cta = el('button', { className: 'scan-cta' }, '📷 Scan a receipt');
+  const cta = el('button', { className: 'ios-scan' });
+  cta.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h1.6l.9-1.5h5l.9 1.5H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.1"/></svg>';
+  cta.append(document.createTextNode('Scan a receipt'));
   cta.onclick = triggerScan;
   view.append(cta);
 
   if (!receipts.length) {
-    view.append(emptyState('🧾', state.parsing_enabled
-      ? 'No receipts yet. Snap one after a shop and we\'ll pull out the items to split.'
-      : 'No receipts yet. Snap one and add the items to split the cost.'));
+    view.append(emptyState('🧾', 'No receipts yet', state.parsing_enabled
+      ? 'Snap one after a shop — we\'ll pull out the items to split.'
+      : 'Snap one and add the items to split the cost.'));
     return;
   }
-  view.append(sectionHead('Receipts', receipts.length));
-  receipts.forEach((r) => view.append(receiptCard(r)));
+  view.append(grpHeader('Receipts'), grp(receipts.map((r) => receiptRow(r))));
 }
 
-function receiptCard(r) {
-  const card = el('div', { className: 'receipt-card' });
+function receiptRow(r) {
+  const row = el('div', { className: 'row receipt-row' });
 
-  const top = el('div', { className: 'receipt-top' });
-  top.append(el('div', { className: 'receipt-store' }, r.store || 'Receipt'));
-  top.append(el('div', { className: 'receipt-total' }, money(r.total, r.currency)));
-  card.append(top);
+  const main = el('div', { className: 'row-main' });
+  main.append(el('div', { className: 'rr-store' }, r.store || 'Receipt'));
 
-  const meta = el('div', { className: 'receipt-meta' });
+  const meta = el('div', { className: 'rr-meta' });
   meta.append(dot(r.buyer_color || '#999'));
-  meta.append(`Paid by ${r.buyer_id === me.id ? 'you' : (r.buyer_name || 'someone')}`);
-  if (r.purchased_at) meta.append(` · ${r.purchased_at}`);
-  card.append(meta);
+  meta.append(`Paid by ${r.buyer_id === me.id ? 'you' : (r.buyer_name || 'someone')}${r.purchased_at ? ' · ' + r.purchased_at : ''}`);
+  main.append(meta);
 
   const { owed } = computeSettlement(r);
   if (r.buyer_id === me.id) {
     const total = Object.values(owed).reduce((a, b) => a + b, 0);
-    if (total > 0.005) card.append(el('div', { className: 'receipt-owe owe-pos' }, `You're owed ${money(total, r.currency)}`));
+    if (total > 0.005) main.append(el('div', { className: 'rr-owe pos' }, `You're owed ${money(total, r.currency)}`));
   } else if ((owed[me.id] || 0) > 0.005) {
-    card.append(el('div', { className: 'receipt-owe owe-neg' }, `You owe ${r.buyer_name || 'them'} ${money(owed[me.id], r.currency)}`));
+    main.append(el('div', { className: 'rr-owe neg' }, `You owe ${r.buyer_name || 'them'} ${money(owed[me.id], r.currency)}`));
   }
+  row.append(main);
 
-  card.onclick = () => openReceipt(r.id);
-  return card;
+  const trailing = el('div', { className: 'rr-trailing' });
+  trailing.append(el('span', { className: 'rr-total' }, money(r.total, r.currency)));
+  trailing.append(el('span', { className: 'chevron' }, '›'));
+  row.append(trailing);
+
+  row.onclick = () => openReceipt(r.id);
+  return row;
 }
 
 // ---- scan flow -----------------------------------------------------------
@@ -507,10 +513,11 @@ function rdField(label, control) {
 function renderReceiptDetail(receipt) {
   const modal = $('#receipt-modal');
   modal.innerHTML = '';
-  const wrap = el('div', { className: 'receipt-detail' });
+  const wrap = el('div', { className: 'sheet receipt-detail' });
+  wrap.append(el('div', { className: 'grabber' }));
 
   const head = el('div', { className: 'rd-head' });
-  head.append(el('h2', {}, '🧾 Receipt'));
+  head.append(el('h2', {}, 'Receipt'));
   const close = el('button', { className: 'rd-close' }, '✕');
   close.onclick = closeReceipt;
   head.append(close);
@@ -524,12 +531,13 @@ function renderReceiptDetail(receipt) {
     body.append(photo);
   }
 
-  // Store
+  // Store / Paid by / Date+Total — grouped iOS form
+  const formGrp = el('div', { className: 'grp form-grp' });
+
   const storeInput = el('input', { type: 'text', value: receipt.store || '', placeholder: 'Shop name' });
   storeInput.onchange = () => patchReceipt(receipt.id, { store: storeInput.value });
-  body.append(rdField('Store', storeInput));
+  formGrp.append(rdField('Store', storeInput));
 
-  // Paid by
   const buyerSel = el('select');
   for (const r of state.roommates) {
     const opt = el('option', { value: String(r.id) }, r.id === me.id ? `${r.name} (you)` : r.name);
@@ -537,9 +545,8 @@ function renderReceiptDetail(receipt) {
     buyerSel.append(opt);
   }
   buyerSel.onchange = () => patchReceipt(receipt.id, { buyer_id: Number(buyerSel.value) });
-  body.append(rdField('Paid by', buyerSel));
+  formGrp.append(rdField('Paid by', buyerSel));
 
-  // Date + Total
   const row2 = el('div', { className: 'rd-row2' });
   const dateInput = el('input', { type: 'text', value: receipt.purchased_at || '', placeholder: 'YYYY-MM-DD' });
   dateInput.onchange = () => patchReceipt(receipt.id, { purchased_at: dateInput.value });
@@ -547,11 +554,17 @@ function renderReceiptDetail(receipt) {
   const totalInput = el('input', { type: 'number', step: '0.01', value: receipt.total == null ? '' : receipt.total });
   totalInput.onchange = () => patchReceipt(receipt.id, { total: totalInput.value === '' ? null : Number(totalInput.value) });
   row2.append(rdField(`Total (${receipt.currency || state.default_currency})`, totalInput));
-  body.append(row2);
+  formGrp.append(row2);
+  body.append(formGrp);
 
   // Items
   body.append(el('div', { className: 'rd-section-label' }, 'Items — assign each to someone'));
-  (receipt.items || []).forEach((it) => body.append(receiptItemRow(receipt, it)));
+  const items = receipt.items || [];
+  if (items.length) {
+    const itemsGrp = el('div', { className: 'grp ri-grp' });
+    items.forEach((it) => itemsGrp.append(receiptItemRow(receipt, it)));
+    body.append(itemsGrp);
+  }
 
   const addBtn = el('button', { className: 'rd-additem' }, '＋ Add item');
   addBtn.onclick = () => addReceiptItem(receipt.id);
@@ -667,8 +680,8 @@ async function deleteReceipt(id) {
 // ---- wire up -------------------------------------------------------------
 function init() {
   $('#add-me-form').addEventListener('submit', onboardSubmit);
-  $('#who-chip').addEventListener('click', switchUser);
-  $('#fab').addEventListener('click', onFab);
+  $('#user-chip').addEventListener('click', switchUser);
+  $('#nav-add').addEventListener('click', onFab);
   $('#cancel-add').addEventListener('click', closeAddModal);
   $('#add-item-form').addEventListener('submit', addItemSubmit);
   $('#add-modal').addEventListener('click', (e) => { if (e.target.id === 'add-modal') closeAddModal(); });

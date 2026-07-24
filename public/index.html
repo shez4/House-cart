@@ -3,18 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#16a34a" />
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <title>House-cart 🛒</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>" />
 </head>
 <body>
   <!-- Who are you? overlay -->
-  <div id="onboarding" class="overlay hidden">
+  <div id="onboarding" class="overlay center hidden">
     <div class="onboard-card">
       <div class="onboard-logo">🛒</div>
       <h1>House-cart</h1>
-      <p class="muted">Who's using this? Pick your name or add yourself to the house.</p>
+      <p>Who's using this? Pick your name or add yourself to the house.</p>
       <div id="roommate-picker" class="roommate-picker"></div>
       <form id="add-me-form" class="add-me-form" autocomplete="off">
         <input id="new-roommate-name" type="text" placeholder="Add your name…" maxlength="40" />
@@ -25,63 +28,71 @@
 
   <!-- App shell -->
   <div id="app" class="app hidden">
-    <header class="topbar">
-      <div class="brand">🛒 <span>House-cart</span></div>
-      <button id="who-chip" class="who-chip" title="Switch user"></button>
+    <header class="navbar">
+      <button id="user-chip" class="user-chip" title="Switch user"></button>
+      <button id="nav-add" class="nav-add" aria-label="Add">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
     </header>
 
     <main id="view" class="view"></main>
 
-    <!-- Floating add button -->
-    <button id="fab" class="fab" aria-label="Add item">＋</button>
-
     <nav class="tabbar">
-      <button class="tab is-active" data-view="shopping"><span>🛒</span>Shopping</button>
-      <button class="tab" data-view="house"><span>🏠</span>House</button>
-      <button class="tab" data-view="mine"><span>🙋</span>Mine</button>
-      <button class="tab" data-view="bought"><span>✅</span>Bought</button>
-      <button class="tab" data-view="split"><span>🧾</span>Split</button>
+      <button class="tab is-active" data-view="shopping">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.3" /><circle cx="18" cy="20" r="1.3" /><path d="M2.5 3.5h2l2.2 11a1.5 1.5 0 0 0 1.5 1.2h8a1.5 1.5 0 0 0 1.5-1.2L21 7H6" /></svg>
+        <span>Shopping</span>
+      </button>
+      <button class="tab" data-view="house">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7" /><path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9" /><path d="M9.5 20v-6h5v6" /></svg>
+        <span>House</span>
+      </button>
+      <button class="tab" data-view="mine">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.4" /><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" /></svg>
+        <span>Mine</span>
+      </button>
+      <button class="tab" data-view="bought">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M8 12.4l2.6 2.6L16 9.5" /></svg>
+        <span>Bought</span>
+      </button>
+      <button class="tab" data-view="split">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-2-1.3-2 1.3-2-1.3-2 1.3-2-1.3L6 21z" /><path d="M9 8h6M9 12h5" /></svg>
+        <span>Split</span>
+      </button>
     </nav>
   </div>
 
   <!-- Hidden file input used for scanning a receipt (opens camera on phones) -->
   <input id="receipt-file" type="file" accept="image/*" capture="environment" class="hidden" />
 
-  <!-- Receipt detail / assignment modal (built dynamically) -->
+  <!-- Receipt detail / assignment sheet (built dynamically) -->
   <div id="receipt-modal" class="overlay hidden"></div>
 
   <!-- Scanning spinner -->
-  <div id="scanning" class="overlay hidden">
+  <div id="scanning" class="overlay center hidden">
     <div class="scan-card">
       <div class="spinner"></div>
       <div id="scan-text">Reading your receipt…</div>
     </div>
   </div>
 
-  <!-- Add-item modal -->
+  <!-- Add-item sheet -->
   <div id="add-modal" class="overlay hidden">
-    <div class="modal">
-      <h2>Add an item</h2>
-      <form id="add-item-form" autocomplete="off">
-        <label>Item
-          <input id="item-name" type="text" placeholder="e.g. Milk" maxlength="80" required />
-        </label>
-        <div class="row">
-          <label class="grow">Quantity
-            <input id="item-qty" type="text" placeholder="e.g. 2L" maxlength="40" />
-          </label>
+    <div class="sheet">
+      <div class="grabber"></div>
+      <div class="sheet-head">
+        <button type="button" id="cancel-add" class="sheet-btn">Cancel</button>
+        <div class="sheet-title">New Item</div>
+        <button type="submit" form="add-item-form" class="sheet-btn strong">Add</button>
+      </div>
+      <form id="add-item-form" class="sheet-body" autocomplete="off">
+        <div class="grp form-grp">
+          <div class="frow"><input id="item-name" type="text" placeholder="Item (e.g. Milk)" maxlength="80" required /></div>
+          <div class="frow"><input id="item-qty" type="text" placeholder="Quantity (e.g. 2L)" maxlength="40" /></div>
+          <div class="frow"><input id="item-note" type="text" placeholder="Note (e.g. semi-skimmed)" maxlength="120" /></div>
         </div>
-        <label>Note
-          <input id="item-note" type="text" placeholder="e.g. semi-skimmed, any brand" maxlength="120" />
-        </label>
-        <fieldset class="dest">
-          <legend>Add to</legend>
-          <label class="radio"><input type="radio" name="dest" value="house" checked /> 🏠 House list</label>
-          <label class="radio"><input type="radio" name="dest" value="personal" /> 🙋 My personal list</label>
-        </fieldset>
-        <div class="modal-actions">
-          <button type="button" id="cancel-add" class="btn btn-ghost">Cancel</button>
-          <button type="submit" class="btn btn-primary">Add item</button>
+        <div class="seg">
+          <label class="seg-opt"><input type="radio" name="dest" value="house" checked /><span>🏠 House</span></label>
+          <label class="seg-opt"><input type="radio" name="dest" value="personal" /><span>🙋 My List</span></label>
         </div>
       </form>
     </div>
