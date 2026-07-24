@@ -72,26 +72,63 @@ deployment with a persistent volume.
 
 ## Deploy — use it from anywhere
 
-The app is a container: a `Dockerfile` is included, so it runs on any host that
-takes a Docker image (Fly.io, Railway, Render, a VPS, …). The only requirement
-is a **persistent volume** mounted at `HOUSECART_DATA_DIR` (default `/data` in
-the image) so the shared list and receipt images survive restarts.
+The app is a container (`Dockerfile` included). It just needs a **persistent
+volume** mounted at `HOUSECART_DATA_DIR` (default `/data` in the image) so the
+shared list and receipt images survive restarts.
 
-**Fly.io** (recommended — free allowance, keeps data on a volume). A `fly.toml`
-is included. After installing [flyctl](https://fly.io/docs/flyctl/install):
+### Self-host with Docker Compose (recommended)
+
+On your own server/machine:
 
 ```bash
-fly launch --no-deploy                        # creates the app (keep the fly.toml)
-fly volumes create housecart_data --size 1    # 1 GB persistent disk
-fly secrets set ANTHROPIC_API_KEY=sk-ant-...  # optional: turns on receipt auto-scan
+git clone https://github.com/shez4/house-cart.git
+cd house-cart
+cp .env.example .env        # then edit .env — ANTHROPIC_API_KEY is optional
+docker compose up -d --build
+```
+
+That serves it on port `3000` and keeps all data in a named Docker volume
+(`housecart_data`), so `docker compose down` / rebuilds don't lose anything.
+Update later with `git pull && docker compose up -d --build`.
+
+Plain Docker without Compose:
+
+```bash
+docker build -t house-cart .
+docker run -d --name house-cart -p 3000:3000 \
+  -v housecart_data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  --restart unless-stopped house-cart
+```
+
+### Make it reachable from anywhere
+
+`docker compose up` serves on `http://<server-ip>:3000` — fine on your home
+network. To reach it from anywhere **with HTTPS** (and without opening ports),
+put a tunnel in front of port 3000:
+
+- **Cloudflare Tunnel** — `cloudflared tunnel --url http://localhost:3000` gives
+  a public HTTPS URL; or bind it to a domain you own.
+- **Tailscale Funnel** — exposes the port to the internet over HTTPS if your
+  server is on Tailscale.
+
+If your server already has a public IP and a domain, a reverse proxy such as
+**Caddy** gives automatic HTTPS in a two-line config pointing at `:3000`.
+
+### Or a managed host (Fly.io)
+
+A `fly.toml` is included. After installing
+[flyctl](https://fly.io/docs/flyctl/install):
+
+```bash
+fly launch --no-deploy
+fly volumes create housecart_data --size 1
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...   # optional
 fly deploy
 ```
 
-Fly prints a public `https://<app>.fly.dev` URL — share that with your
-roommates. Set the API key as a **secret** (as above), never in `fly.toml`.
-
-On other hosts, point them at the `Dockerfile`, attach a volume at `/data`, and
-set `ANTHROPIC_API_KEY` in the host's environment.
+Fly prints a public `https://<app>.fly.dev` URL. Always set the API key as a
+**secret** / host env var — never commit it.
 
 ## API
 

@@ -1,0 +1,21 @@
+# Self-host House-cart with one command:  docker compose up -d --build
+# Data (SQLite DB + receipt images) is kept in the named volume below, so it
+# survives `docker compose down` and image rebuilds.
+services:
+  house-cart:
+    build: .
+    # Prefer a prebuilt image? Comment out `build: .` above and use:
+    # image: ghcr.io/YOU/house-cart:latest
+    ports:
+      - "3000:3000"          # host:container — change the left number to serve on another port
+    volumes:
+      - housecart_data:/data # persistent DB + uploaded receipt images
+    environment:
+      # Values come from a .env file next to this compose file (see .env.example).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - HOUSECART_CURRENCY=${HOUSECART_CURRENCY:-£}
+      - HOUSECART_PARSE_MODEL=${HOUSECART_PARSE_MODEL:-claude-haiku-4-5}
+    restart: unless-stopped
+
+volumes:
+  housecart_data:
