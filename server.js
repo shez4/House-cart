@@ -18,12 +18,44 @@ const DEFAULT_CURRENCY = process.env.HOUSECART_CURRENCY || '$';
 app.use(express.json({ limit: '15mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
+// Diagnostics: what's configured and can we actually reach the database?
+// Safe to expose — reports presence of config, never the values.
+app.get('/api/health', async (_req, res) => {
+  const out = {
+    ok: false,
+    postgres_url_set: Boolean(process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL),
+    blob_configured: blobEnabled(),
+    google_signin_configured: authEnabled(),
+    receipt_scanning_configured: parsingEnabled(),
+    database: 'unknown',
+  };
+  if (!out.postgres_url_set) {
+    out.database = 'no connection string';
+    out.hint = 'Create a Postgres store in the Vercel dashboard (Storage → Create), connect it to this project, then redeploy.';
+    return res.status(503).json(out);
+  }
+  try {
+    await initDb();
+    out.ok = true;
+    out.database = 'connected';
+    return res.json(out);
+  } catch (err) {
+    out.database = 'connection failed';
+    out.detail = err.message;
+    out.hint = 'Check that the Postgres store is connected to this project and that you redeployed after adding it.';
+    return res.status(503).json(out);
+  }
+});
+
 // Ensure the schema exists before any request touches the database.
-app.use(async (_req, res, next) => {
+app.use('/api', async (_req, res, next) => {
   try { await initDb(); next(); }
   catch (err) {
-    console.error('DB init failed:', err);
-    res.status(500).json({ error: 'Database unavailable. Check POSTGRES_URL.' });
+    console.error('DB init failed:', err.message);
+    res.status(503).json({
+      error: 'Database not reachable. Create a Postgres store in your Vercel dashboard (Storage → Create), connect it to this project, then redeploy.',
+      detail: err.message,
+    });
   }
 });
 

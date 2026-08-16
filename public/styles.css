@@ -416,6 +416,22 @@ body {
 .btn-primary { background: var(--tint); color: #fff; }
 .btn-ghost { background: var(--fill); color: var(--label); }
 
+/* Startup failure screen */
+.fatal-detail {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--label-2);
+  background: var(--fill);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0 0 18px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
 /* Sign-in + house screens */
 .gbtn { display: flex; justify-content: center; margin: 6px 0 4px; min-height: 44px; }
 .signin-note { margin-top: 14px; font-size: 13px; }

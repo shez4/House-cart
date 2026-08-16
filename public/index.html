@@ -26,6 +26,17 @@
     </div>
   </div>
 
+  <!-- Startup failure (e.g. database not configured) -->
+  <div id="fatal" class="overlay center hidden">
+    <div class="onboard-card">
+      <div class="onboard-logo">⚠️</div>
+      <h1>Can't start</h1>
+      <p id="fatal-msg" class="muted"></p>
+      <pre id="fatal-detail" class="fatal-detail hidden"></pre>
+      <button id="fatal-retry" type="button" class="btn btn-primary">Try again</button>
+    </div>
+  </div>
+
   <!-- Sign in with Google (auth mode) -->
   <div id="signin" class="overlay center hidden">
     <div class="onboard-card">

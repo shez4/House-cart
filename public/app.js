@@ -29,10 +29,18 @@ async function api(path, opts = {}) {
     ...opts,
   });
   if (!res.ok) {
-    let msg = 'Something went wrong.';
-    try { msg = (await res.json()).error || msg; } catch { /* ignore */ }
+    let msg = `Server error (${res.status}).`;
+    let detail = null;
+    try {
+      const body = await res.json();
+      msg = body.error || msg;
+      detail = body.detail || null;
+    } catch {
+      // Non-JSON response (e.g. a platform error page) — keep the status message.
+    }
     const err = new Error(msg);
     err.status = res.status;
+    err.detail = detail;
     throw err;
   }
   return res.status === 204 ? null : res.json();
@@ -106,7 +114,18 @@ async function onboardSubmit(e) {
 }
 
 function hideOverlays() {
-  ['#onboarding', '#signin', '#house'].forEach((s) => $(s).classList.add('hidden'));
+  ['#onboarding', '#signin', '#house', '#fatal'].forEach((s) => $(s).classList.add('hidden'));
+}
+
+// Startup failure screen — shows the real reason so it's actually fixable.
+function showFatal(message, detail) {
+  $('#app').classList.add('hidden');
+  hideOverlays();
+  $('#fatal-msg').textContent = message;
+  const d = $('#fatal-detail');
+  if (detail) { d.textContent = detail; d.classList.remove('hidden'); }
+  else d.classList.add('hidden');
+  $('#fatal').classList.remove('hidden');
 }
 function enterApp() {
   hideOverlays();
@@ -857,8 +876,13 @@ function copyCode(code) {
 // ---- bootstrap -----------------------------------------------------------
 async function bootstrap() {
   let s;
-  try { s = await api('/api/session'); }
-  catch { toast('Could not reach the server.'); return; }
+  try {
+    s = await api('/api/session');
+  } catch (err) {
+    // Show what actually went wrong instead of a generic message.
+    showFatal(err.message || 'Could not reach the server.', err.detail);
+    return;
+  }
   session = s;
   closeAccount();
 
@@ -892,6 +916,7 @@ function init() {
   $('#add-item-form').addEventListener('submit', addItemSubmit);
   $('#add-modal').addEventListener('click', (e) => { if (e.target.id === 'add-modal') closeAddModal(); });
   $('#receipt-file').addEventListener('change', onReceiptFile);
+  $('#fatal-retry').addEventListener('click', bootstrap);
   $('#create-house-form').addEventListener('submit', createHouse);
   $('#join-house-form').addEventListener('submit', joinHouse);
   $('#house-signout').addEventListener('click', signOut);
