@@ -49,27 +49,27 @@ Zealand dollars — set to e.g. `NZ$`, `£`, or `€` to change it).
 
 ## Tech
 
-- **Backend:** Node.js + Express, with a SQLite database via the built-in
-  `node:sqlite` module (no native build step, one dependency).
+- **Backend:** Node.js + Express with **Postgres** (`pg`), designed to run
+  either as a long-running server or as a serverless function.
+- **Storage:** receipt photos go to **Vercel Blob** (optional).
 - **Frontend:** a single-page app in plain HTML / CSS / JS (no build tooling),
   mobile-first with light/dark support.
 
-## Run it
+## Run it locally
 
-Requires **Node.js 22.5+**.
+Requires **Node.js 20+** and a Postgres database.
 
 ```bash
 npm install
+cp .env.example .env          # set POSTGRES_URL at minimum
 npm start
 ```
 
-Then open **http://localhost:3000** in a browser. To let roommates on other
-devices reach it, run it on a machine/host they can access and share the URL
-(set `PORT` to change the port).
+Then open **http://localhost:3000**. Tables are created automatically on first
+request.
 
-The database is stored at `data/house-cart.db` (created automatically, ignored
-by git). Set `HOUSECART_DATA_DIR` to store it elsewhere — useful for
-deployment with a persistent volume.
+No Postgres handy? `docker compose up -d --build` starts the app **and** a
+Postgres container together.
 
 ## Sign in with Google (optional)
 
@@ -98,11 +98,29 @@ Leave `GOOGLE_CLIENT_ID` unset to keep the simple name-picker.
 
 ## Deploy — use it from anywhere
 
-The app is a container (`Dockerfile` included). It just needs a **persistent
-volume** mounted at `HOUSECART_DATA_DIR` (default `/data` in the image) so the
-shared list and receipt images survive restarts.
+### Vercel (recommended)
 
-### Self-host with Docker Compose (recommended)
+1. Push this repo to GitHub and **import it** at
+   [vercel.com/new](https://vercel.com/new). The included `vercel.json` tells
+   Vercel how to build and route it.
+2. In the project's **Storage** tab, **create a Postgres database** and connect
+   it to the project. Vercel injects `POSTGRES_URL` automatically.
+3. *(Optional)* In the same tab, **create a Blob store** to hold receipt
+   photos. Vercel injects `BLOB_READ_WRITE_TOKEN` automatically. Skip it and
+   receipts still work, just without photos.
+4. *(Optional)* Add `GOOGLE_CLIENT_ID` and/or `ANTHROPIC_API_KEY` under
+   **Settings → Environment Variables**.
+5. **Redeploy** after adding storage so the new variables are picked up.
+
+Database tables are created automatically on the first request — there's no
+migration step to run.
+
+> **Why Postgres?** Serverless functions have a read-only, ephemeral
+> filesystem, so a file-based database can't persist there. Postgres and Blob
+> storage live outside the function, which is what makes the app work on
+> Vercel (and any other serverless host).
+
+### Self-host with Docker Compose
 
 On your own server/machine:
 
@@ -113,19 +131,13 @@ cp .env.example .env        # then edit .env — ANTHROPIC_API_KEY is optional
 docker compose up -d --build
 ```
 
-That serves it on port `3000` and keeps all data in a named Docker volume
-(`housecart_data`), so `docker compose down` / rebuilds don't lose anything.
-Update later with `git pull && docker compose up -d --build`.
+That starts the app on port `3000` **plus its own Postgres container**, with the
+database kept in a named Docker volume (`housecart_db`) so `docker compose down`
+and rebuilds don't lose anything. Update later with
+`git pull && docker compose up -d --build`.
 
-Plain Docker without Compose:
-
-```bash
-docker build -t house-cart .
-docker run -d --name house-cart -p 3000:3000 \
-  -v housecart_data:/data \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  --restart unless-stopped house-cart
-```
+To point at an existing Postgres instead, set `POSTGRES_URL` in `.env` and
+remove the `db` service from `docker-compose.yml`.
 
 ### Make it reachable from anywhere
 
@@ -143,13 +155,13 @@ If your server already has a public IP and a domain, a reverse proxy such as
 
 ### Or a managed host (Fly.io)
 
-A `fly.toml` is included. After installing
-[flyctl](https://fly.io/docs/flyctl/install):
+A `fly.toml` is included. Attach a Postgres database (`fly postgres create`,
+then `fly postgres attach` — this sets `DATABASE_URL`) and deploy:
 
 ```bash
 fly launch --no-deploy
-fly volumes create housecart_data --size 1
-fly secrets set ANTHROPIC_API_KEY=sk-ant-...   # optional
+fly postgres create && fly postgres attach <db-name>
+fly secrets set GOOGLE_CLIENT_ID=...   # optional
 fly deploy
 ```
 

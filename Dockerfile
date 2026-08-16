@@ -1,6 +1,4 @@
-# House-cart — small Node + Express app with a built-in SQLite database.
-# node:22-slim ships Node with the built-in node:sqlite module, so there's
-# no native build step.
+# House-cart — small Node + Express app backed by Postgres.
 FROM node:22-slim
 
 WORKDIR /app
@@ -13,9 +11,8 @@ COPY . .
 
 ENV NODE_ENV=production
 ENV PORT=3000
-# Database + uploaded receipt images live here; mount a persistent volume at
-# this path so data survives restarts and redeploys.
-ENV HOUSECART_DATA_DIR=/data
+# Data lives in Postgres (POSTGRES_URL) and receipt photos in Blob storage,
+# so the container itself is stateless.
 
 EXPOSE 3000
 CMD ["node", "--no-warnings", "server.js"]

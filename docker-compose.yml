@@ -1,17 +1,34 @@
-# Self-host House-cart with one command:  docker compose up -d --build
-# Data (SQLite DB + receipt images) is kept in the named volume below, so it
-# survives `docker compose down` and image rebuilds.
+# Self-host House-cart with Docker (alternative to deploying on Vercel).
+# Runs the app plus its own Postgres database.
+#   cp .env.example .env   # POSTGRES_URL is set for you below; fill in the rest
+#   docker compose up -d --build
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-housecart}
+      POSTGRES_USER: housecart
+      POSTGRES_DB: housecart
+    volumes:
+      - housecart_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U housecart"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   house-cart:
     build: .
-    # Prefer a prebuilt image? Comment out `build: .` above and use:
-    # image: ghcr.io/YOU/house-cart:latest
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
-      - "3000:3000"          # host:container — change the left number to serve on another port
-    volumes:
-      - housecart_data:/data # persistent DB + uploaded receipt images
+      - "3000:3000"
     environment:
-      # Values come from a .env file next to this compose file (see .env.example).
+      - POSTGRES_URL=postgres://housecart:${POSTGRES_PASSWORD:-housecart}@db:5432/housecart
+      # Optional — see .env.example
+      - BLOB_READ_WRITE_TOKEN=${BLOB_READ_WRITE_TOKEN:-}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - HOUSECART_CURRENCY=${HOUSECART_CURRENCY:-}
@@ -19,4 +36,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  housecart_data:
+  housecart_db:

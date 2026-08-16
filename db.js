@@ -1,116 +1,133 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+// Postgres data layer. Works with Vercel Postgres / Neon / any Postgres URL.
+// Serverless-friendly: a small shared pool, lazily created per warm instance.
+import pg from 'pg';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const { Pool } = pg;
 
-// Keep the database file in ./data (gitignored). Allow override for deployment.
-const dataDir = process.env.HOUSECART_DATA_DIR || join(__dirname, 'data');
-mkdirSync(dataDir, { recursive: true });
+const connectionString =
+  process.env.POSTGRES_URL ||
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_PRISMA_URL ||
+  '';
 
-const db = new DatabaseSync(join(dataDir, 'house-cart.db'));
+if (!connectionString) {
+  console.warn('[house-cart] No POSTGRES_URL/DATABASE_URL set — the app cannot store data.');
+}
 
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-`);
+// Hosted Postgres (Vercel/Neon/Supabase) requires TLS; a local dev server doesn't.
+const isLocal = /@(localhost|127\.0\.0\.1)/.test(connectionString);
 
-// ---- migration ------------------------------------------------------------
-// v1 stored a single global house with no auth. v2 adds houses/users/sessions
-// and scopes data per house. Old databases (pre-deploy dev data) are reset.
-const tableExists = (name) =>
-  !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
-const columns = (name) => {
-  try { return db.prepare(`PRAGMA table_info(${name})`).all().map((c) => c.name); }
-  catch { return []; }
-};
+let pool = null;
+export function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      connectionString,
+      ssl: isLocal ? false : { rejectUnauthorized: false },
+      max: Number(process.env.PGPOOL_MAX || 3), // keep small for serverless
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+    });
+    pool.on('error', (err) => console.error('[house-cart] idle pg client error:', err.message));
+  }
+  return pool;
+}
 
-if (tableExists('items') && !columns('items').includes('house_id')) {
-  console.warn('[house-cart] Upgrading database to the multi-house schema — existing dev data is being reset.');
-  db.exec(`
-    DROP TABLE IF EXISTS receipt_items;
-    DROP TABLE IF EXISTS receipts;
-    DROP TABLE IF EXISTS items;
-    DROP TABLE IF EXISTS roommates;
-  `);
+// Query helper: sql`...` style is overkill here, so a plain function.
+export async function q(text, params = []) {
+  const res = await getPool().query(text, params);
+  return res.rows;
+}
+export async function one(text, params = []) {
+  const rows = await q(text, params);
+  return rows[0] || null;
 }
 
 // ---- schema ---------------------------------------------------------------
-db.exec(`
-  CREATE TABLE IF NOT EXISTS houses (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL,
-    join_code  TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+let initPromise = null;
+export function initDb() {
+  if (!initPromise) initPromise = createSchema();
+  return initPromise;
+}
 
-  CREATE TABLE IF NOT EXISTS users (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    google_sub TEXT NOT NULL UNIQUE,
-    email      TEXT,
-    name       TEXT,
-    picture    TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    id         TEXT PRIMARY KEY,
-    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    expires_at TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS roommates (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    house_id   INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
-    user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    name       TEXT NOT NULL,
-    color      TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (house_id, name),
-    UNIQUE (house_id, user_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS items (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    house_id   INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
-    name       TEXT NOT NULL,
-    quantity   TEXT,
-    note       TEXT,
-    list_type  TEXT NOT NULL CHECK (list_type IN ('house','personal')),
-    owner_id   INTEGER REFERENCES roommates(id) ON DELETE CASCADE,
-    added_by   INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
-    claimed_by INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
-    bought     INTEGER NOT NULL DEFAULT 0,
-    bought_by  INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    bought_at  TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS receipts (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    house_id     INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
-    buyer_id     INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
-    store        TEXT,
-    currency     TEXT,
-    total        REAL,
-    purchased_at TEXT,
-    image_file   TEXT,
-    parse_status TEXT,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS receipt_items (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    receipt_id  INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL,
-    price       REAL NOT NULL DEFAULT 0,
-    assigned_to INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
-    shared      INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
-
-export { dataDir };
-export default db;
+async function createSchema() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS houses (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      join_code  TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS users (
+      id         SERIAL PRIMARY KEY,
+      google_sub TEXT NOT NULL UNIQUE,
+      email      TEXT,
+      name       TEXT,
+      picture    TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id         TEXT PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS roommates (
+      id         SERIAL PRIMARY KEY,
+      house_id   INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+      user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      name       TEXT NOT NULL,
+      color      TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (house_id, name),
+      UNIQUE (house_id, user_id)
+    );
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS items (
+      id         SERIAL PRIMARY KEY,
+      house_id   INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      quantity   TEXT,
+      note       TEXT,
+      list_type  TEXT NOT NULL CHECK (list_type IN ('house','personal')),
+      owner_id   INTEGER REFERENCES roommates(id) ON DELETE CASCADE,
+      added_by   INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+      claimed_by INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+      bought     INTEGER NOT NULL DEFAULT 0,
+      bought_by  INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      bought_at  TIMESTAMPTZ
+    );
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS receipts (
+      id           SERIAL PRIMARY KEY,
+      house_id     INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+      buyer_id     INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+      store        TEXT,
+      currency     TEXT,
+      total        REAL,
+      purchased_at TEXT,
+      image_url    TEXT,
+      parse_status TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS receipt_items (
+      id          SERIAL PRIMARY KEY,
+      receipt_id  INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      price       REAL NOT NULL DEFAULT 0,
+      assigned_to INTEGER REFERENCES roommates(id) ON DELETE SET NULL,
+      shared      INTEGER NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+}

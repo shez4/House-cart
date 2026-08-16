@@ -1,7 +1,7 @@
 // Google Sign-In + session handling. When GOOGLE_CLIENT_ID isn't set the app
 // runs in "open" mode (the simple name-picker) and none of this is used.
 import crypto from 'node:crypto';
-import db from './db.js';
+import { q, one } from './db.js';
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const SESSION_DAYS = 30;
@@ -35,39 +35,36 @@ export async function verifyGoogleToken(idToken) {
 }
 
 // ---- users ----------------------------------------------------------------
-const userBySub = db.prepare('SELECT * FROM users WHERE google_sub = ?');
-const userById = db.prepare('SELECT * FROM users WHERE id = ?');
-const insertUser = db.prepare('INSERT INTO users (google_sub, email, name, picture) VALUES (?, ?, ?, ?)');
-const updateUser = db.prepare('UPDATE users SET email = ?, name = ?, picture = ? WHERE id = ?');
-
-export function upsertUser({ sub, email, name, picture }) {
-  const existing = userBySub.get(sub);
-  if (existing) {
-    updateUser.run(email, name, picture, existing.id);
-    return userById.get(existing.id);
-  }
-  const { lastInsertRowid } = insertUser.run(sub, email, name, picture);
-  return userById.get(lastInsertRowid);
+export async function upsertUser({ sub, email, name, picture }) {
+  return one(
+    `INSERT INTO users (google_sub, email, name, picture)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (google_sub) DO UPDATE SET email = $2, name = $3, picture = $4
+     RETURNING *`,
+    [sub, email, name, picture],
+  );
 }
 
 // ---- sessions -------------------------------------------------------------
-const insertSession = db.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)');
-const sessionById = db.prepare('SELECT * FROM sessions WHERE id = ?');
-const deleteSession = db.prepare('DELETE FROM sessions WHERE id = ?');
-
-export function createSession(userId) {
+export async function createSession(userId) {
   const id = crypto.randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + SESSION_DAYS * 86400000).toISOString();
-  insertSession.run(id, userId, expires);
+  await q('INSERT INTO sessions (id, user_id, expires_at) VALUES ($1, $2, $3)', [id, userId, expires]);
   return id;
 }
 
-function userFromSessionId(id) {
+async function userFromSessionId(id) {
   if (!id) return null;
-  const s = sessionById.get(id);
-  if (!s) return null;
-  if (new Date(s.expires_at).getTime() < Date.now()) { deleteSession.run(id); return null; }
-  return userById.get(s.user_id) || null;
+  const row = await one(
+    `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.id = $1 AND s.expires_at > NOW()`,
+    [id],
+  );
+  return row || null;
+}
+
+export async function destroySession(id) {
+  if (id) await q('DELETE FROM sessions WHERE id = $1', [id]);
 }
 
 // ---- cookies --------------------------------------------------------------
@@ -94,10 +91,9 @@ export function setSessionCookie(req, res, id) {
   if (isSecure(req)) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
 }
-export function clearSessionCookie(req, res) {
+export async function clearSessionCookie(req, res) {
   const parts = [`${COOKIE}=`, 'HttpOnly', 'Path=/', 'SameSite=Lax', 'Max-Age=0'];
   if (isSecure(req)) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
-  destroySession(sessionIdFromReq(req));
+  await destroySession(sessionIdFromReq(req));
 }
-export function destroySession(id) { if (id) deleteSession.run(id); }
