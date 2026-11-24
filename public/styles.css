@@ -250,7 +250,10 @@ body {
 .tabbar {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* Auto columns so hiding a tab (e.g. Split when receipts are off) reflows
+     to an even row instead of leaving a gap. */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   background: var(--bar-bg);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
@@ -258,6 +261,8 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
   z-index: 20;
 }
+.tab[hidden] { display: none; }
+
 .tab {
   display: flex;
   flex-direction: column;

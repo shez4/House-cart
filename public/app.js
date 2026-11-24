@@ -166,10 +166,21 @@ function avatar(r, size = 30) {
 
 const VIEW_TITLES = { shopping: 'Shopping', house: 'House', mine: 'My List', bought: 'Bought', split: 'Split' };
 
+// Receipts are only useful when the server can read a photo, so the Split tab
+// stays hidden until receipt parsing is configured. Set ANTHROPIC_API_KEY to
+// switch the whole feature back on; nothing else needs changing.
+function receiptsEnabled() {
+  return Boolean(state.parsing_enabled);
+}
+
 function render() {
   const chip = $('#user-chip');
   chip.innerHTML = '';
   chip.append(avatar(me), el('span', { className: 'user-name' }, me.name));
+
+  const splitTab = document.querySelector('.tab[data-view="split"]');
+  if (splitTab) splitTab.hidden = !receiptsEnabled();
+  if (!receiptsEnabled() && currentView === 'split') currentView = 'shopping';
 
   document.querySelectorAll('.tab').forEach((t) =>
     t.classList.toggle('is-active', t.dataset.view === currentView));
@@ -492,7 +503,7 @@ function receiptRow(r) {
 
 // ---- scan flow -----------------------------------------------------------
 function onFab() {
-  if (currentView === 'split') triggerScan();
+  if (currentView === 'split' && receiptsEnabled()) triggerScan();
   else openAddModal();
 }
 
